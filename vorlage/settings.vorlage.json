@@ -1,0 +1,38 @@
+{
+  "autoMemoryDirectory": "{{HOME}}/gedaechtnis",
+  "cleanupPeriodDays": 365,
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "Edit({{HOME}}/**)",
+      "Write({{HOME}}/**)",
+      "Bash(python3 {{KIT}}/werkzeuge/*)",
+      "mcp__google"
+    ],
+    "deny": [
+      "Read(~/.config/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.bashrc)",
+      "Read(~/.profile)",
+      "Read({{INSTANZ}}/config.toml)",
+      "Read({{INSTANZ}}/google.env)",
+      "Read(/etc/pearl-kit/**)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/credentials/**)",
+      "Bash(rm -rf *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "mcp__google__set_drive_file_permissions",
+      "mcp__google__manage_drive_access",
+      "mcp__google__manage_out_of_office",
+      "mcp__google__get_drive_shareable_link"
+    ]
+  }
+}

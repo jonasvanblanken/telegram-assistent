@@ -1,0 +1,9 @@
+[Unit]
+Description=Wache alle drei Minuten (pearl-kit)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+
+[Install]
+WantedBy=timers.target

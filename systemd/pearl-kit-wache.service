@@ -1,0 +1,6 @@
+[Unit]
+Description=Wache über alle Assistenten auf dieser Box (pearl-kit)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/pearl-kit/box/wache.py

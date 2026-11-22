@@ -1,0 +1,13 @@
+[Unit]
+Description=Google Workspace MCP des Assistenten (HTTP, nur localhost)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/pearl-kit/google/google-mcp.sh
+Restart=on-failure
+RestartSec=5
+MemoryMax=600M
+
+[Install]
+WantedBy=default.target
