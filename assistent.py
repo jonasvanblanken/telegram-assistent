@@ -107,7 +107,7 @@ LAUF_NAMEN = {"morgen": "Morgen-Check-in", "abend": "Abend-Check-in", "wochenrue
 HILFE = ("Schreib mir einfach, auch Sprachnachrichten, Fotos und Dateien.\n"
          "/status  was gerade läuft\n"
          + ("/google  Kalender und Mail verbinden\n" if GOOGLE_KONTO or (WEB and GOOGLE_PORT) else "")
-         + ("/anmelden  deine KI neu anmelden oder wechseln\n" if WEB else "")
+         + ("/ki  zwischen deinen KIs wechseln oder eine weitere verbinden\n" if WEB else "")
          + "/neu  neues Gespräch. Brauchst du nicht, ich wechsle selbst und halte vorher fest, was bleiben soll")
 GOOGLE_RUECKRUF = re.compile(r"https?://(?:localhost|127\.0\.0\.1):(\d+)/oauth2callback\?(\S+)")
 
@@ -397,9 +397,44 @@ def liegen_geblieben():
     return False
 
 
+def verbundene():
+    """Anbieter mit hinterlegtem Zugang, in der Reihenfolge der Einrichtungsseite."""
+    return [k for k in anbieter.REIHE if anbieter.angemeldet(k)]
+
+
+def ki_wechseln(name):
+    """Zu einer schon verbundenen KI wechseln, ohne neue Anmeldung. Ein offenes Gespräch sichert erst noch die
+    bisherige KI (im Arbeiter-Faden), danach gilt die neue. Rückgabe: Fehlertext oder ''."""
+    if name not in anbieter.ANBIETER or not anbieter.angemeldet(name):
+        return "Diese KI ist noch nicht verbunden."
+    if name == KI_ANBIETER:
+        return ""
+    if load().get("sitzung"):
+        einreihen("ki", name)
+    else:
+        anmeldung_fertig(name)
+    return ""
+
+
+def ki_uebersicht():
+    """/ki: aktive KI, Wechsel per Befehl zum Antippen, Knopf für eine weitere."""
+    andere = [k for k in verbundene() if k != KI_ANBIETER]
+    text = f"Du sprichst gerade mit {KI_NAME}." if KI_ANBIETER else "Ich bin noch mit keiner KI verbunden."
+    if andere:
+        text += "\n" + "\n".join(f"Zu {anbieter.name(k)} wechseln: /ki_{k}" for k in andere)
+    fehlt = [anbieter.name(k) for k in anbieter.ANGEBOTEN if k not in verbundene()]
+    if not WEB:
+        return sende_text(text)
+    if fehlt:
+        text += f"\n\nDu kannst zusätzlich {' oder '.join(fehlt)} verbinden und dann jederzeit wechseln."
+    url = anmeldelink(neu=True) + "&wo=ki"
+    sende_knopf(text, "Weitere KI verbinden" if fehlt else "KI neu anmelden", url)
+
+
 def einrichtung_stand():
     st = load()
     return {"person": PERSON, "assistent": NAME, "anbieter": KI_ANBIETER, "eingerichtet": eingerichtet(),
+            "verbunden": verbundene(),
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))}}
@@ -435,7 +470,8 @@ def pforte_starten():
         srv = pforte.starten(WEB_PORT, {
             "name": lambda: NAME or "Dein Assistent", "bot": bot_sicher, "link_gueltig": link_gueltig,
             "fertig": anmeldung_fertig, "google": google_web, "stand": einrichtung_stand, "namen": name_setzen,
-            "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen})
+            "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen,
+            "wechseln": ki_wechseln})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
         return srv
     except OSError as e:
@@ -1494,6 +1530,16 @@ def schlange_laden():
 
 # --- Dienst -------------------------------------------------------------------
 
+def server_ip():
+    """Öffentliche IPv4 des Servers aus den Hetzner-Metadaten, damit die Person sie ohne Hetzner-Konsole findet."""
+    try:
+        r = requests.get("http://169.254.169.254/hetzner/v1/metadata/public-ipv4", timeout=1)
+        ip = r.text.strip() if r.ok else ""
+        return ip if re.fullmatch(r"[0-9.]{7,15}", ip) else ""
+    except requests.RequestException:
+        return ""
+
+
 def befehl(text):
     cmd = text.split()[0].lower().split("@")[0]
     if cmd == "/neu":
@@ -1503,7 +1549,17 @@ def befehl(text):
         einrichten_hinweis(immer=True, wo="google")
     elif cmd == "/google":
         google_anmelden()
-    elif cmd == "/anmelden":
+    elif cmd == "/ki" and WEB and eingerichtet():
+        ki_uebersicht()
+    elif cmd.startswith("/ki_") and eingerichtet():
+        name = cmd[4:]
+        if name == KI_ANBIETER:
+            sende_text(f"Ich bin schon mit {KI_NAME} verbunden.")
+        elif (f := ki_wechseln(name)):
+            sende_text(f + " Tipp auf /ki, dann kannst du sie verbinden.")
+        elif load().get("sitzung"):
+            sende_text(f"Ich halte noch fest, was wir besprochen haben, dann wechsle ich zu {anbieter.name(name)}.")
+    elif cmd in ("/anmelden", "/ki"):
         einrichten_hinweis(immer=True, wo="ki" if eingerichtet() else "")
     elif cmd in ("/start", "/einrichten") and WEB and not eingerichtet():
         einrichten_hinweis(immer=True)
@@ -1519,9 +1575,13 @@ def befehl(text):
         st = load()
         aktiv = st.get("sitzung") and st.get("tag") == gespraechstag()
         seit = datetime.datetime.fromtimestamp(st.get("seit", 0), TZ).strftime("%d.%m. %H:%M")
-        zeilen = [f"KI: {KI_NAME if KI_ANBIETER else 'noch nicht angemeldet'}",
+        auch = [anbieter.name(k) for k in verbundene() if k != KI_ANBIETER]
+        zeilen = [f"KI: {KI_NAME if KI_ANBIETER else 'noch nicht angemeldet'}"
+                  + (f" (auch verbunden: {', '.join(auch)}, wechseln mit /ki)" if auch and KI_ANBIETER else ""),
                   f"Gespräch: {f'seit {seit}, {st.get('kontext', 0) // 1000}k Tokens' if aktiv else 'noch keins offen'}",
                   f"Warteschlange: {_arbeit.qsize()}"]
+        if (ip := server_ip()):
+            zeilen.append(f"Server-IP: {ip}")
         for m, bis in st.get("gesperrt", {}).items():
             if bis > time.time():
                 zeilen.append(f"Kontingent {m.capitalize()}: aufgebraucht bis {zeitpunkt(bis)}")
@@ -1575,6 +1635,12 @@ def arbeiter():
             if art == "wechsel":
                 wechsel(inhalt)
                 sichere_offene()
+                continue
+            if art == "ki":   # erst mit der bisherigen KI sichern, dann wechseln
+                if inhalt != KI_ANBIETER and anbieter.angemeldet(inhalt):
+                    wechsel(f"Wechsel zu {anbieter.name(inhalt)}")
+                    sichere_offene()
+                    anmeldung_fertig(inhalt)
                 continue
             nachrichten = [inhalt]
             time.sleep(BUENDELN)
@@ -1818,7 +1884,8 @@ def handle(u):
         log(f"Fremdes Konto {frm.get('id')} ignoriert")
         return
     if text.startswith("/") and text.split()[0].lower().split("@")[0] in ("/neu", "/status", "/start", "/hilfe", "/help", "/google",
-                                                                       "/anmelden", "/einrichten"):
+                                                                       "/anmelden", "/einrichten", "/ki") or \
+            re.fullmatch(r"/ki_[a-z]+", text.split()[0].lower().split("@")[0]):
         return befehl(text)
     if google_rueckruf(text):
         return
@@ -1851,7 +1918,7 @@ def dienst():
         if GOOGLE_KONTO or (WEB and GOOGLE_PORT):
             befehle.append({"command": "google", "description": "Kalender und Mail verbinden"})
         if WEB:
-            befehle.append({"command": "anmelden", "description": "KI neu anmelden oder wechseln"})
+            befehle.append({"command": "ki", "description": "KI wechseln oder eine weitere verbinden"})
         befehle.append({"command": "neu", "description": "Neues Gespräch (brauchst du nicht)"})
         telegram("setMyCommands", {"commands": befehle})
         if WEB:

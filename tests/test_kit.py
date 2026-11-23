@@ -678,6 +678,7 @@ class Einladung(Chat, unittest.TestCase):
         self.addCleanup(lambda: self.pf.anmeldung and self.pf.anmeldung.beenden())
 
     holen, senden, warte, angemeldet = Anmeldeseite.holen, Anmeldeseite.senden, Anmeldeseite.warte, Anmeldeseite.angemeldet
+    token = Anmeldeseite.token
 
     def config(self):
         return open(os.path.join(self.inst.env["ASSISTENT_DIR"], "config.toml"), encoding="utf-8").read()
@@ -759,6 +760,33 @@ class Einladung(Chat, unittest.TestCase):
         pfad = os.path.join(self.a.HOME_DIR, "CLAUDE.md")
         self.assertEqual(self.a.name_setzen("Mara", "Ottilie"), "")
         self.assertIn("Ottilie", open(pfad, encoding="utf-8").read())
+
+    def test_zwischen_ki_wechseln(self):
+        t = self.binden()
+        self.senden("/einrichten/namen", {"t": t, "person": "Mara", "assistent": "Lotte"})
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")
+        self.assertEqual(self.a.verbundene(), ["claude"])
+        FalscherServer.anfragen.clear()
+        self.nachricht("/ki", von=777)
+        k = self.knoepfe()
+        self.assertIn("Du sprichst gerade mit Claude", k[-1][0])
+        self.assertIn("ChatGPT verbinden", k[-1][0])
+        self.assertTrue(k[-1][2].endswith("&wo=ki"))
+        self.assertEqual(self.senden("/anmelden/wechseln", {"t": t, "anbieter": "chatgpt"}).get("ok"), False)
+        os.makedirs(self.a.anbieter.CODEX_HOME, exist_ok=True)   # ChatGPT ist jetzt auch verbunden
+        open(os.path.join(self.a.anbieter.CODEX_HOME, "auth.json"), "w").write("{}")
+        self.assertEqual(json.loads(self.holen(f"/einrichten/stand?t={self.token()}")[1])["verbunden"], ["claude", "chatgpt"])
+        FalscherServer.anfragen.clear()
+        self.nachricht("/ki", von=777)
+        self.assertTrue(any("/ki_chatgpt" in x for x in self.gesendet()))
+        self.nachricht("/ki_chatgpt", von=777)   # kein offenes Gespräch: sofort
+        self.assertEqual(self.a.KI_ANBIETER, "chatgpt")
+        self.assertEqual(self.senden("/anmelden/wechseln", {"t": self.token(), "anbieter": "claude"}).get("ok"), True)
+        self.assertEqual(self.a.KI_ANBIETER, "claude")
+        self.a.update(sitzung="s-claude", tag=self.a.gespraechstag())   # offenes Gespräch: über den Arbeiter
+        self.nachricht("/ki_chatgpt", von=777)
+        self.assertTrue(glob.glob(os.path.join(self.a.SCHLANGE, "*-ki.json")))
 
     def test_seite_liegen_geblieben(self):
         self.binden()

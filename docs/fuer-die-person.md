@@ -24,7 +24,7 @@ Danach stellt sich dein Assistent im Chat vor. Das Ganze dauert drei Minuten.
 - Er schickt nie selbst Mails. Er legt Entwürfe an, abschicken tust du
 - Passwörter, PINs und TANs gehören nicht in den Chat
 - `/status` zeigt, woran er gerade ist
-- `/anmelden` öffnet die Einrichtung wieder, etwa wenn du die KI wechseln willst, `/google` dasselbe für Kalender und Mail
+- `/ki` wechselt zwischen deinen KIs, etwa von Claude zu ChatGPT, oder verbindet eine weitere. `/anmelden` öffnet die Einrichtung wieder, `/google` dasselbe für Kalender und Mail
 
 ## Wer was sieht
 

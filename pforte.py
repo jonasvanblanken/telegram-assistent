@@ -7,6 +7,7 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /einrichten/namen           {t, person, assistent}
   POST /anmelden/start             {t, anbieter}  startet das Login-Programm des Anbieters
   POST /anmelden/code              {t, code}      gibt den Code der Person an das Login-Programm
+  POST /anmelden/wechseln          {t, anbieter}  wechselt zu einer schon verbundenen KI, ohne neue Anmeldung
   POST /einrichten/google          {t, konto, dienste}  Google-Dienst mit den Schaltern starten, Anmeldelink zurück
   POST /einrichten/google-aus      {t}            ohne Google weiter
   POST /einrichten/fertig          {t}            home/ anlegen, der Assistent stellt sich im Chat vor
@@ -329,7 +330,7 @@ def einrichtungsseite(name, bot):
     e = html.escape
     wahl = "".join(
         f'<button class="zeile" data-anbieter="{k}"><span class="kachel">{ICON["funke"]}</span>'
-        f'<span><b>{e(v["name"])}</b><small>{e(v["abo"])}</small></span></button>'
+        f'<span><b>{e(v["name"])}</b><small data-abo="{e(v["abo"])}">{e(v["abo"])}</small></span></button>'
         for k, v in ((k, anbieter.ANBIETER[k]) for k in anbieter.ANGEBOTEN))
     schalter = "".join(
         f'<label class="schalter"><span class="kachel">{ICON[icon]}</span><span><b>{titel}</b><small>{was}</small></span>'
@@ -409,7 +410,8 @@ function zeichne(){
   for(const k of STUFEN){const el=$('s-'+k),fertig=e[k]&&k!==offen;
     el.classList.toggle('offen',k===offen);el.classList.toggle('erledigt',fertig);
     el.querySelector('.aendern').hidden=!fertig||!!zeit;el.querySelector('.erledigt-text').textContent=fertig?texte[k]:'';
-    const n=document.querySelector('[data-zu='+k+']');n.classList.toggle('aktiv',k===offen);n.classList.toggle('fertig',fertig)}}
+    const n=document.querySelector('[data-zu='+k+']');n.classList.toggle('aktiv',k===offen);n.classList.toggle('fertig',fertig)}
+  wahlZeichnen()}
 function weiter(){
   if(bearbeitet&&S.eingerichtet){offen='';zeichne();return fertig('Gespeichert','Du kannst zurück zu Telegram.')}
   const e=erledigt();offen=STUFEN.find(k=>!e[k])||'';zeichne();if(!offen)abschluss()}
@@ -420,7 +422,7 @@ async function abschluss(){
 function fertig(titel,text){clearInterval(zeit);clearInterval(googleZeit);zeit=null;offen='';zeichne();$('fertig-titel').textContent=titel;
   $('fertig-text').textContent=text;$('fertig').hidden=false;
   for(const k of STUFEN)$('s-'+k).classList.remove('offen');$('fertig').scrollIntoView({behavior:'smooth',block:'center'})}
-function oeffnen(k){bearbeitet=true;offen=k;$('fertig').hidden=true;zeichne();if(k==='ki')zuruecksetzen()}
+function oeffnen(k){bearbeitet=true;offen=k;$('fertig').hidden=true;zeichne();if(k==='ki'){zuruecksetzen();wahlZeichnen()}}
 document.querySelectorAll('.aendern').forEach(b=>b.onclick=()=>oeffnen(b.dataset.schritt));
 $('zu-telegram').onclick=()=>{if(tg)tg.close();else location.href='https://t.me/'+BOT};
 $('namen-weiter').onclick=async()=>{const p=$('person').value.trim(),a=$('assistent').value.trim();
@@ -430,7 +432,8 @@ $('namen-weiter').onclick=async()=>{const p=$('person').value.trim(),a=$('assist
 const zeige=(...ids)=>{for(const id of ['laedt','link-teil','code-teil','pruefen','fehlschlag'])$(id).hidden=!ids.includes(id)};
 function zuruecksetzen(){clearInterval(zeit);zeit=null;$('wahl').hidden=false;$('login').hidden=true;$('code').value='';fehler('code-fehler','')}
 function login(s){
-  if(s.stand==='fertig'){clearInterval(zeit);zeit=null;S.anbieter=s.anbieter;zuruecksetzen();return weiter()}
+  if(s.stand==='fertig'){clearInterval(zeit);zeit=null;S.anbieter=s.anbieter;
+    S.verbunden=[...new Set([...(S.verbunden||[]),s.anbieter])];zuruecksetzen();return weiter()}
   if(s.stand==='fehler'||s.ok===false){clearInterval(zeit);zeit=null;$('fehler-text').textContent=s.fehler||'Das hat nicht geklappt.';return zeige('fehlschlag')}
   if(s.stand==='startet'||!s.url)return zeige('laedt');
   const n=NAMEN[s.anbieter]||'';$('link').dataset.url=s.url;
@@ -443,7 +446,12 @@ function login(s){
   if(s.stand==='prueft'){$('pruefen-text').textContent='Ich prüfe die Anmeldung …';return zeige('pruefen')}
   zeige('link-teil','code-teil')}
 function beobachten(){clearInterval(zeit);zeit=setInterval(async()=>{const s=await stand();if(s&&s.login)login(s.login)},2000)}
+function wahlZeichnen(){document.querySelectorAll('[data-anbieter]').forEach(b=>{const k=b.dataset.anbieter,x=b.querySelector('small');
+  x.textContent=k===S.anbieter?'Aktiv, tippen zum neu Anmelden':((S.verbunden||[]).includes(k)?'Verbunden, tippen zum Wechseln':x.dataset.abo)})}
 document.querySelectorAll('[data-anbieter]').forEach(b=>b.onclick=async()=>{
+  const k=b.dataset.anbieter;
+  if(k!==S.anbieter&&(S.verbunden||[]).includes(k)){const r=await post('anmelden/wechseln',{anbieter:k});
+    if(r.ok===false)return fehler('code-fehler',r.fehler);S.anbieter=k;return weiter()}
   $('wahl').hidden=true;$('login').hidden=false;zeige('laedt');zeichne();
   login(await post('anmelden/start',{anbieter:b.dataset.anbieter}));if(!$('fehlschlag').hidden)return;beobachten()});
 $('link').onclick=()=>oeffne($('link').dataset.url);
@@ -575,6 +583,9 @@ def handler_fuer(pforte):
                 if name not in anbieter.ANBIETER:
                     return self.senden(400, {"ok": False})
                 return self.senden(200, pforte.starte(name))
+            if self.path == "/anmelden/wechseln":
+                f = h["wechseln"](str(d.get("anbieter") or ""))
+                return self.senden(200, {"ok": not f, "fehler": f})
             if self.path == "/anmelden/code":
                 a = pforte.anmeldung
                 if not a or not a.code(str(d.get("code") or "")):

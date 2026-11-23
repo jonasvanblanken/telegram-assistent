@@ -129,7 +129,7 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 | Log einer Person | `journalctl _UID=$(id -u a-anna) --user-unit assistent -n 50` |
 | Selbsttest | `runuser -u a-anna -- env HOME=/home/a-anna python3 /opt/pearl-kit/assistent.py pruefen` |
 | Neu starten | `systemctl --user -M a-anna@ restart assistent` |
-| KI neu anmelden oder wechseln | Die Person schickt `/anmelden`, für Kalender und Mail `/google`. Lehnt die KI die Anmeldung ab, bekommt sie den Link von selbst. Beim Wechsel beginnt ein neues Gespräch, das Gedächtnis bleibt |
+| KI neu anmelden oder wechseln | Die Person schickt `/ki`: Sie wechselt per Antippen zwischen allen verbundenen KIs (`/ki_claude`, `/ki_chatgpt`) oder verbindet eine weitere, `/anmelden` öffnet die Einrichtung, für Kalender und Mail `/google`. Lehnt die KI die Anmeldung ab, bekommt sie den Link von selbst. Beim Wechsel sichert erst die bisherige KI das offene Gespräch, dann beginnt ein neues, das Gedächtnis bleibt |
 | Ohne Domain neu anmelden | Claude: `sudo -u a-anna -i claude setup-token`, Token in `secrets.env` als `CLAUDE_CODE_OAUTH_TOKEN` ersetzen, `CLAUDE_TOKEN_SEIT` auf heute. ChatGPT: `auth.json` in `~/.local/share/assistent/codex/` löschen und `person-anlegen.sh anna` noch einmal. Gemini ebenso mit `gemini/.gemini/oauth_creds.json` |
 | Modell oder Zeiten ändern | Modell, Effort, Rechte: `[ki]` in `config.toml` der Person (leer heißt Standard des Anbieters), dann Neustart. Zeiten: Die Person sagt es dem Assistenten, er ändert seine `jobs/` selbst |
 | Neue Fassung des Kits | rsync nach `/root/pearl-kit/`, dann `bash /root/pearl-kit/box/aktualisieren.sh`. Tests laufen vorher, das Gelernte bleibt |
