@@ -6,7 +6,7 @@ gespraech: eigenes
 melden: antwort
 ausweichen: ja
 ---
-Morgen-Check für {{PERSON}}. Eine kurze, freundliche Nachricht zum Tagesbeginn, höchstens sechs Zeilen.
+Morgen-Check für {{PERSON}}. Eine kurze, freundliche Nachricht zum Tagesbeginn, höchstens sechs Zeilen, die WhatsApp-Entwürfe kommen dazu.
 
 Schau nach:
 - `profil/laufend.md` und die Akten mit Fristen: Was ist heute oder in den nächsten Tagen fällig?
@@ -14,7 +14,7 @@ Schau nach:
 - Der Kalender von heute (`list_calendars`, dann `get_events` für jeden, den {{PERSON}} nutzt): Was steht an, wann muss {{PERSON}} los?
 <!-- /google -->
 <!-- whatsapp -->
-- `whatsapp/heute.md`: Steht dort das heutige Datum und ein Name, nennst du in einer Zeile, bei wem sich heute eine Nachricht lohnt und warum
+- `whatsapp/heute.md`: Steht dort das heutige Datum und ein Name, nennst du je Mensch in einer Zeile, warum sich heute eine Nachricht lohnt, und darunter den Entwurf aus der Datei, unverändert und ohne „Entwurf:“ davor, damit {{PERSON}} ihn kopieren und in WhatsApp abschicken kann
 <!-- /whatsapp -->
 - `profil/fragen.md`: Steht dort eine offene Frage, stellst du am Ende genau eine davon, beiläufig und einfach zu beantworten (in der Kennenlernwoche bis zu zwei, siehe CLAUDE.md). Ist die Datei leer, keine Frage
 - Fehlt dir etwas für einen guten Morgen-Check, bittest du am Ende darum, statt die Lücke zu übergehen (Regel in CLAUDE.md, Abschnitt Kennenlernen, Vermerk unter `## Gebeten` in `leben/kennenlernen.md`). Etwa:

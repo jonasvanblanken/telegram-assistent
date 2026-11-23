@@ -139,7 +139,7 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 
 ## WhatsApp (Erweiterung)
 
-Nur auf dem eigenen Server: Der Assistent bietet es einmal von selbst an (oder die Person schickt `/whatsapp`), eine Seite in Telegram holt die Einwilligung und zeigt den QR-Code, ab dann pflegt der Assistent nachts Notizen zu den Menschen im engen Kreis und schlägt morgens vor, wem sie schreiben könnte. Aufbau und Hinweise für die Person: `docs/whatsapp.md`.
+Nur auf dem eigenen Server: Der Assistent bietet es einmal von selbst an (oder die Person schickt `/whatsapp`), eine Seite in Telegram holt die Einwilligung und zeigt den QR-Code, ab dann pflegt der Assistent nachts Notizen zu den Menschen im engen Kreis und schlägt morgens vor, wem sie schreiben könnte, mit einem fertigen Entwurf je Mensch. Aufbau und Hinweise für die Person: `docs/whatsapp.md`.
 
 ## Stolperfallen
 

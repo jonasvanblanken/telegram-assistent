@@ -1,6 +1,6 @@
 # WhatsApp-Erweiterung
 
-Für Menschen, die schon einen Assistenten auf ihrem eigenen Server haben. Der Assistent liest nachts die Einzelchats mit, pflegt zu den Menschen im engen Kreis eine kurze Notiz und sagt morgens, bei wem sich eine Nachricht lohnt. Schreiben kann er in WhatsApp nicht.
+Für Menschen, die schon einen Assistenten auf ihrem eigenen Server haben. Der Assistent liest nachts die Einzelchats mit, pflegt zu den Menschen im engen Kreis eine kurze Notiz und schickt morgens bis zu vier Menschen, bei denen sich eine Nachricht lohnt, jeweils mit einem fertigen Entwurf zum Kopieren. Schreiben kann er in WhatsApp nicht, abschicken tut die Person selbst.
 
 ## Einschalten
 

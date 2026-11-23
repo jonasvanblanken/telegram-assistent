@@ -20,7 +20,7 @@ aus
 
 - `Sweep-State.md`: Lesestand, Namensbrücke, bewusst Ausgenommene, wer wann vorgeschlagen wurde
 - `Sweep-Report.md`: was der letzte Nachtlauf getan hat, darunter die Historie
-- `heute.md`: die Vorschläge des Nachtlaufs für den Morgen
+- `heute.md`: die Vorschläge des Nachtlaufs für den Morgen, je Mensch mit Anlass und Entwurf
 - `verfahren.md`: wie der Nachtlauf arbeitet
 - `.sweep/`: Arbeitsdateien mit Nachrichtentext. Nie lesen außer im Nachtlauf, nie in Notizen kopieren
 
