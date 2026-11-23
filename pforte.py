@@ -439,7 +439,7 @@ function login(s){
     $('pruefen-text').textContent='Warte auf OpenAI …';return zeige('link-teil','pruefen')}
   $('geraetecode').hidden=$('kopieren').hidden=true;$('link').textContent='Bei '+n+' anmelden';
   $('link-text').textContent=s.anbieter==='claude'?'Mit dem Konto, zu dem dein Claude-Abo gehört.':'Mit deinem privaten Google-Konto.';
-  $('code-text').textContent='Danach zeigt dir '+n+' einen Code. Kopier ihn und füg ihn hier ein.';
+  $('code-text').textContent='Danach zeigt dir '+n+' einen Code. Kopier ihn und füg ihn hier ein, am Handy mit langem Tippen ins Feld.';
   if(s.stand==='prueft'){$('pruefen-text').textContent='Ich prüfe die Anmeldung …';return zeige('pruefen')}
   zeige('link-teil','code-teil')}
 function beobachten(){clearInterval(zeit);zeit=setInterval(async()=>{const s=await stand();if(s&&s.login)login(s.login)},2000)}
@@ -448,8 +448,10 @@ document.querySelectorAll('[data-anbieter]').forEach(b=>b.onclick=async()=>{
   login(await post('anmelden/start',{anbieter:b.dataset.anbieter}));if(!$('fehlschlag').hidden)return;beobachten()});
 $('link').onclick=()=>oeffne($('link').dataset.url);
 $('kopieren').onclick=async()=>{try{await navigator.clipboard.writeText($('geraetecode').textContent);$('kopieren').textContent='Kopiert'}catch(e){}};
-if(!(navigator.clipboard&&navigator.clipboard.readText))$('einfuegen').hidden=true;
-$('einfuegen').onclick=async()=>{try{$('code').value=(await navigator.clipboard.readText()).trim()}catch(e){$('code').focus()}};
+// Am Handy fragt das System beim Lesen der Zwischenablage noch einmal nach, dort reicht Lang-Tippen ins Feld.
+if(!(navigator.clipboard&&navigator.clipboard.readText)||matchMedia('(pointer: coarse)').matches)$('einfuegen').hidden=true;
+$('einfuegen').onclick=async()=>{try{$('code').value=(await navigator.clipboard.readText()).trim();$('senden').click()}catch(e){$('code').focus()}};
+$('code').addEventListener('paste',()=>setTimeout(()=>{if($('code').value.trim().length>=20&&!$('senden').disabled)$('senden').click()},60));
 $('senden').onclick=async()=>{const c=$('code').value.trim();if(!c)return;$('senden').disabled=true;
   const s=await post('anmelden/code',{code:c});$('senden').disabled=false;
   if(s.ok===false)return fehler('code-fehler',s.fehler);fehler('code-fehler','');login(s);beobachten()};
