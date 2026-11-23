@@ -104,7 +104,8 @@ WOCHENTAG = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 MONATE = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 LAUF_NAMEN = {"morgen": "Morgen-Check-in", "abend": "Abend-Check-in", "wochenrueckblick": "Wochenrückblick",
               "herzschlag": "Herzschlag", "tagesabschluss": "Tagesabschluss",
-              "vorstellen": "Vorstellen"}
+              "vorstellen": "Vorstellen", "whatsapp-nacht": "WhatsApp-Nachtlauf",
+              "whatsapp-kreis": "Kreis festlegen", "whatsapp-morgen": "WhatsApp-Vorschläge"}
 HILFE = ("Schreib mir einfach, auch Sprachnachrichten, Fotos und Dateien.\n"
          "/status  was gerade läuft\n"
          + ("/google  Kalender und Mail verbinden\n" if GOOGLE_KONTO or (WEB and GOOGLE_PORT) else "")
@@ -1645,8 +1646,238 @@ def server_ip():
         return ""
 
 
+# --- WhatsApp (Erweiterung, nur auf dem eigenen Server der Person) --------------
+# Der Bot läuft als die Person und darf nichts als root. Er schreibt einen Auftrag nach STATE_DIR/whatsapp-auftrag,
+# assistent-whatsapp.path startet box/whatsapp.sh als root, das meldet seinen Stand in WA_DIR/stand. Den QR-Code holt
+# der Bot selbst von der Bridge auf 127.0.0.1 und schickt ihn als Bild, das sich mit jedem neuen Code erneuert.
+
+WA_DIR = os.environ.get("ASSISTENT_WA_DIR") or "/var/lib/pearl-kit/whatsapp"
+WA_API = os.environ.get("ASSISTENT_WA_API") or "http://127.0.0.1:8080/api"
+WA_UNIT = os.environ.get("ASSISTENT_WA_UNIT") or "/etc/systemd/system/assistent-whatsapp.path"
+WA_AUFTRAG = os.path.join(STATE_DIR, "whatsapp-auftrag")
+WA_QR_ZEIT = 30 * 60             # so lange wartet der Server auf den Scan
+WA_MAX = 100 * 60                # länger begleitet der Bot eine Einrichtung nicht
+WA_TAKT = float(os.environ.get("ASSISTENT_WA_TAKT", "3"))   # so oft schaut er auf den Stand des Servers
+_wa_faden = None
+
+WA_EINWILLIGUNG = (
+    "**WhatsApp verbinden**\n\n"
+    "Dann lese ich jede Nacht deine Einzelchats mit und halte zu den Menschen, die dir wichtig sind, kurz fest, was "
+    "sich tut. Morgens sage ich dir, bei wem sich eine Nachricht lohnt. Gruppen lasse ich aus, schreiben kann ich in "
+    "WhatsApp nicht.\n\n"
+    "Zwei Dinge solltest du wissen. Die Verbindung läuft über ein inoffizielles Programm, das sich wie WhatsApp Web "
+    "anmeldet. WhatsApp sieht so etwas nicht gern und kann die Verknüpfung im schlimmsten Fall sperren. Und deine "
+    "Kontakte haben nicht zugestimmt: Sag es den Menschen, die dir nah sind, kurz, eine Vorlage dafür schreibe ich "
+    "dir gern.\n\n"
+    "Deine Nachrichten liegen verschlüsselt auf deinem Server, niemand sonst kommt dran. Für den QR-Code brauchst du "
+    "einen zweiten Bildschirm, etwa Telegram am Laptop, denn scannen musst du mit dem Handy.\n\n"
+    "Einverstanden? Dann tipp /whatsapp_ja")
+WA_QR_TEXT = ("Öffne diese Nachricht am Laptop. Am Handy in WhatsApp: Einstellungen (oder Menü ⋮), Verknüpfte Geräte, "
+              "Gerät hinzufügen. Dann den Code scannen, er erneuert sich von selbst.")
+
+
+def wa_moeglich():
+    """Nur auf dem eigenen Server (ohne Betreuer) und erst, wenn der Server den Auftrag abholen kann."""
+    return not ADMIN and os.path.exists(WA_UNIT)
+
+
+def wa_status():
+    try:
+        return kit.lies_config()["whatsapp"]["status"]
+    except (kit.ConfigFehler, KeyError):
+        return "aus"
+
+
+def wa_stand():
+    """(stand, geändert um) aus WA_DIR/stand, ohne Datei ("", 0)."""
+    pfad = os.path.join(WA_DIR, "stand")
+    try:
+        return open(pfad, encoding="utf-8").read().strip(), os.path.getmtime(pfad)
+    except OSError:
+        return "", 0
+
+
+def wa_auftrag(was):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    with open(WA_AUFTRAG + ".tmp", "w", encoding="utf-8") as f:
+        f.write(was + "\n")
+    os.replace(WA_AUFTRAG + ".tmp", WA_AUFTRAG)   # erst jetzt sieht der Path-Unit die Datei
+
+
+def wa_qr():
+    """Aktueller QR-Code der Bridge als Text, sonst ""."""
+    try:
+        r = requests.get(f"{WA_API}/auth/qr", timeout=5)
+        return (r.json().get("qr_code") or "") if r.ok else ""
+    except Exception:
+        return ""
+
+
+def wa_qr_bild(code):
+    pfad = os.path.join(STATE_DIR, "whatsapp-qr.png")
+    subprocess.run(["qrencode", "-o", pfad, "-s", "10", "-m", "3", code], check=True, timeout=20)
+    return pfad
+
+
+def wa_werkzeug(*args):
+    p = subprocess.run([sys.executable, os.path.join(HERE, "werkzeuge", "whatsapp.py"), *args], cwd=HOME_DIR,
+                       capture_output=True, text=True, timeout=120)
+    return p.returncode, (p.stdout.strip() or p.stderr.strip())[-500:]
+
+
+def wa_begleiten(was, seit):
+    """Läuft in einem eigenen Faden, bis der Server fertig ist. Übersteht einen Neustart über state["whatsapp"]."""
+    qr_nachricht, qr_code, qr_seit, gemeldet = None, "", 0.0, set()
+
+    def qr_weg():
+        nonlocal qr_nachricht
+        if qr_nachricht:
+            try:
+                telegram("deleteMessage", {"chat_id": PERSON_ID, "message_id": qr_nachricht})
+            except Exception:
+                pass
+            qr_nachricht = None
+
+    def ende():
+        with _lock:
+            st = load()
+            st.pop("whatsapp", None)
+            save(st)
+
+    while time.time() - seit < WA_MAX:
+        time.sleep(WA_TAKT)
+        if os.path.exists(WA_AUFTRAG) and time.time() - seit > 90:
+            os.remove(WA_AUFTRAG)
+            sende_text("Auf deinem Server fehlt dafür noch ein Teil. Er kommt mit dem nächsten Update, spätestens in "
+                       "einer Stunde. Versuch es danach noch einmal mit /whatsapp.")
+            return ende()
+        stand, um = wa_stand()
+        if um < seit - 1:   # Stand von einem früheren Auftrag
+            continue
+        if stand.startswith("fehler"):
+            qr_weg()
+            sende_text(stand.partition(":")[2].strip() or "Die Einrichtung ist schiefgegangen. Schick /whatsapp_neu.")
+            return ende()
+        if was == "aus":
+            if stand == "aus":
+                sende_text("WhatsApp ist getrennt, auf dem Server ist davon nichts mehr. Deine Notizen zu den Menschen "
+                           "bleiben. Am Handy kannst du unter Verknüpfte Geräte den Eintrag noch löschen.")
+                return ende()
+            continue
+        if stand == "baut" and "baut" not in gemeldet and time.time() - seit > 20 * 60:
+            gemeldet.add("baut")
+            sende_text("Der Server baut noch, das dauert beim ersten Mal etwas. Ich melde mich mit dem QR-Code.")
+        elif stand == "bereit":
+            if not qr_seit:
+                qr_seit = time.time()
+            if time.time() - qr_seit > WA_QR_ZEIT:
+                qr_weg()
+                sende_text("Der QR-Code ist abgelaufen. Schick /whatsapp_neu, wenn du es noch einmal versuchen willst.")
+                return ende()
+            code = wa_qr()
+            if code and code != qr_code:
+                try:
+                    bild = wa_qr_bild(code)
+                    with open(bild, "rb") as f:
+                        if qr_nachricht:
+                            telegram("editMessageMedia", {"chat_id": PERSON_ID, "message_id": qr_nachricht,
+                                                          "media": {"type": "photo", "media": "attach://qr",
+                                                                    "caption": WA_QR_TEXT}},
+                                     files={"qr": ("qr.png", f)}, timeout=60)
+                        else:
+                            r = telegram("sendPhoto", {"chat_id": PERSON_ID, "caption": WA_QR_TEXT},
+                                         files={"photo": ("qr.png", f)}, timeout=60)
+                            qr_nachricht = r["result"]["message_id"]
+                    qr_code = code
+                except Exception as e:
+                    log(f"WhatsApp: QR-Code nicht gesendet ({type(e).__name__}: {e})")
+        elif stand == "verknuepft" and "verknuepft" not in gemeldet:
+            gemeldet.add("verknuepft")
+            qr_weg()
+            sende_text("Verbunden. Jetzt kommen deine Kontakte an, das dauert zwei, drei Minuten.")
+        elif stand == "fertig":
+            qr_weg()
+            code, aus = wa_werkzeug("einrichten")
+            log(f"WhatsApp einrichten: Exit {code}: {aus[:200]}")
+            if code:
+                sende_text("WhatsApp ist verbunden, aber bei mir hakt noch etwas. Schick /whatsapp_neu, dann richte "
+                           "ich es noch einmal ein.")
+            else:
+                sende_text("WhatsApp ist eingerichtet. Gleich frage ich dich, wer dir nah ist, ab heute Nacht halte ich "
+                           "fest, was sich bei diesen Menschen tut. /whatsapp zeigt dir den Stand, /whatsapp_aus "
+                           "trennt alles wieder.")
+            return ende()
+    qr_weg()
+    sende_text("Die Einrichtung von WhatsApp hat zu lange gedauert. Schick /whatsapp_neu, dann versuche ich es noch "
+               "einmal.")
+    ende()
+
+
+def wa_starten(was, seit=None):
+    global _wa_faden
+    if _wa_faden and _wa_faden.is_alive():
+        return False
+    seit = seit or time.time()
+    if not load().get("whatsapp"):
+        wa_auftrag(was)
+        update(whatsapp={"was": was, "seit": seit})
+    _wa_faden = threading.Thread(target=wa_begleiten, args=(was, seit), daemon=True)
+    _wa_faden.start()
+    return True
+
+
+def wa_fortsetzen():
+    """Beim Start: eine Einrichtung, die vor dem Neustart lief, weiter begleiten."""
+    w = load().get("whatsapp")
+    if w and time.time() - w.get("seit", 0) < WA_MAX:
+        wa_starten(w["was"], w["seit"])
+    elif w:
+        update(whatsapp=None)
+
+
+def wa_befehl(cmd):
+    if not wa_moeglich():
+        return sende_text("WhatsApp gibt es nur auf einem eigenen Server. Hier geht es leider nicht.")
+    laeuft = bool(_wa_faden and _wa_faden.is_alive())
+    stand, _ = wa_stand()
+    if cmd == "/whatsapp":
+        if laeuft:
+            return sende_text("Ich bin gerade dabei, WhatsApp einzurichten oder zu trennen. Ich melde mich.")
+        if wa_status() != "an":
+            return sende_text(WA_EINWILLIGUNG)
+        code, aus = wa_werkzeug("status")
+        try:
+            s = json.loads(aus)
+            zeile = f"gelesen bis {s['lesestand_lesbar'][-11:]}" + \
+                (f", {len(s['warteschlange'])} Chats folgen nächste Nacht" if s.get("warteschlange") else "")
+        except (ValueError, KeyError):
+            zeile = "noch kein Lauf"
+        verbunden = "verbunden" if stand == "fertig" else f"Server meldet „{stand or 'nichts'}“"
+        return sende_text(f"WhatsApp: {verbunden}, {zeile}. Hakt etwas, hilft /whatsapp_neu. /whatsapp_aus trennt "
+                          "alles wieder, deine Notizen bleiben.")
+    if cmd in ("/whatsapp_ja", "/whatsapp_neu"):
+        if laeuft:
+            return sende_text("Läuft schon, ich melde mich.")
+        if cmd == "/whatsapp_neu" and not load().get("whatsapp_ja"):
+            return sende_text(WA_EINWILLIGUNG)
+        update(whatsapp_ja=load().get("whatsapp_ja") or time.time(), whatsapp=None)
+        wa_starten("an")
+        return sende_text("Ich richte das jetzt auf deinem Server ein. Beim ersten Mal dauert es zehn bis fünfzehn "
+                          "Minuten, dann schicke ich dir den QR-Code.")
+    if cmd == "/whatsapp_aus":
+        if laeuft:
+            return sende_text("Warte kurz, bis die laufende Einrichtung durch ist, dann geht das.")
+        code, aus = wa_werkzeug("abschalten")
+        log(f"WhatsApp abschalten: Exit {code}: {aus[:200]}")
+        update(whatsapp=None)
+        wa_starten("aus")
+        return sende_text("Ich trenne WhatsApp und räume den Server auf. Das dauert eine Minute.")
+
+
 def befehl(text):
     cmd = text.split()[0].lower().split("@")[0]
+    if cmd.startswith("/whatsapp"):
+        return wa_befehl(cmd)
     if cmd == "/neu":
         einreihen("wechsel", f"{PERSON} hat /neu geschickt")
         sende_text("Neues Gespräch. Was wir besprochen haben, halte ich vorher noch fest.")
@@ -1687,6 +1918,8 @@ def befehl(text):
                   f"Warteschlange: {_arbeit.qsize()}"]
         if (ip := server_ip()):
             zeilen.append(f"Server-IP: {ip}")
+        if wa_moeglich() and wa_status() == "an":
+            zeilen.append(f"WhatsApp: {'verbunden' if wa_stand()[0] == 'fertig' else wa_stand()[0] or 'unklar'}, mehr mit /whatsapp")
         for m, bis in st.get("gesperrt", {}).items():
             if bis > time.time():
                 zeilen.append(f"Kontingent {m.capitalize()}: aufgebraucht bis {zeitpunkt(bis)}")
@@ -1702,7 +1935,7 @@ def befehl(text):
                 zeilen.append(f"{name}: {wann} {j['zeit']}, zuletzt {st.get('jobs', {}).get(name, 'nie')}")
         sende_text("\n".join(zeilen))
     else:
-        sende_text(HILFE)
+        sende_text(HILFE + ("\n/whatsapp  WhatsApp verbinden" if wa_moeglich() else ""))
 
 
 BEGRUESSUNG = ("Ich helfe dir im Alltag: Termine, Erinnerungen, Fristen, Ideen, alles, was sonst untergeht. "
@@ -1989,7 +2222,9 @@ def handle(u):
         log(f"Fremdes Konto {frm.get('id')} ignoriert")
         return
     if text.startswith("/") and text.split()[0].lower().split("@")[0] in ("/neu", "/status", "/start", "/hilfe", "/help", "/google",
-                                                                       "/anmelden", "/einrichten", "/ki") or \
+                                                                       "/anmelden", "/einrichten", "/ki",
+                                                                       "/whatsapp", "/whatsapp_ja", "/whatsapp_neu",
+                                                                       "/whatsapp_aus") or \
             re.fullmatch(r"/ki_[a-z]+", text.split()[0].lower().split("@")[0]):
         return befehl(text)
     if google_rueckruf(text):
@@ -2024,6 +2259,8 @@ def dienst():
             befehle.append({"command": "google", "description": "Kalender und Mail verbinden"})
         if WEB:
             befehle.append({"command": "ki", "description": "KI wechseln oder eine weitere verbinden"})
+        if wa_moeglich():
+            befehle.append({"command": "whatsapp", "description": "WhatsApp verbinden"})
         befehle.append({"command": "neu", "description": "Neues Gespräch (brauchst du nicht)"})
         telegram("setMyCommands", {"commands": befehle})
         if WEB:
@@ -2047,6 +2284,10 @@ def dienst():
             pass
     threading.Thread(target=arbeiter, daemon=True).start()
     threading.Thread(target=zeitplan, daemon=True).start()
+    try:
+        wa_fortsetzen()
+    except Exception as e:
+        log(f"WhatsApp-Einrichtung nicht fortgesetzt ({e})")
     try:
         fragebogen_anbieten()
     except Exception as e:

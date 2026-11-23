@@ -1,0 +1,49 @@
+[Unit]
+Description=WhatsApp bridge (whatsmeow -> local REST API)
+Documentation=https://github.com/adelaidasofia/whatsapp-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whatsapp
+Group=whatsapp
+WorkingDirectory=/var/lib/whatsapp-mcp
+ExecStart=/opt/whatsapp-mcp/bin/whatsapp-bridge
+
+# Secrets (WHATSAPP_DB_KEY) live here. systemd reads this file as root
+# before dropping to the whatsapp user, so 0600 root:root is correct and the
+# service user itself never gets to read the key off disk.
+EnvironmentFile=/etc/whatsapp-mcp/bridge.env
+
+Restart=always
+RestartSec=10s
+
+# The bridge holds a long-lived WhatsApp socket. Reconnects are rate-limited
+# inside the process on purpose (see watchdog.go): hammering re-auth risks an
+# account-level block, which is worse than the outage. So restart slowly and
+# never treat a flapping socket as a reason to bounce the process.
+StartLimitIntervalSec=0
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/whatsapp-mcp
+# Loopback is all it needs; it refuses a non-loopback bind at startup anyway.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-bridge
+
+[Install]
+WantedBy=multi-user.target

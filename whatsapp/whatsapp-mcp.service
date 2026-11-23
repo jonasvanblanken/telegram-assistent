@@ -1,0 +1,46 @@
+[Unit]
+Description=WhatsApp MCP server (HTTP + bearer token)
+Documentation=https://github.com/adelaidasofia/whatsapp-mcp
+After=network-online.target whatsapp-bridge.service
+Wants=network-online.target
+# Deliberately Wants, not Requires: the MCP layer starts and answers
+# healthcheck even when the bridge is down, which is how a nightly run finds
+# out the bridge is down instead of just timing out.
+Wants=whatsapp-bridge.service
+
+[Service]
+Type=simple
+User=whatsapp
+Group=whatsapp
+WorkingDirectory=/opt/whatsapp-mcp/app/whatsapp-mcp-server
+# The venv interpreter directly, not `uv run`: uv wants a writable project
+# dir and a cache at runtime, which fights ProtectSystem=strict for no gain.
+ExecStart=/opt/whatsapp-mcp/app/whatsapp-mcp-server/.venv/bin/python server_http.py
+
+EnvironmentFile=/etc/whatsapp-mcp/mcp.env
+Environment=HOME=/var/lib/whatsapp-mcp
+Environment=PYTHONUNBUFFERED=1
+
+Restart=always
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/whatsapp-mcp
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-mcp
+
+[Install]
+WantedBy=multi-user.target

@@ -16,9 +16,10 @@ bash "$KIT/box/ki-programme.sh"
 install -m 644 "$KIT/systemd/pearl-kit-wache.service" "$KIT/systemd/pearl-kit-wache.timer" /etc/systemd/system/
 if [ -d /opt/assistent-quelle/.git ]; then   # eigener Server aus der Cloud-config: holt neue Fassungen selbst
   install -m 644 "$KIT/systemd/assistent-aktualisieren.service" "$KIT/systemd/assistent-aktualisieren.timer" /etc/systemd/system/
+  install -m 644 "$KIT/systemd/assistent-whatsapp.path" "$KIT/systemd/assistent-whatsapp.service" /etc/systemd/system/
   systemctl daemon-reload
-  systemctl enable -q assistent-aktualisieren.timer
-  systemctl start assistent-aktualisieren.timer
+  systemctl enable -q assistent-aktualisieren.timer assistent-whatsapp.path
+  systemctl start assistent-aktualisieren.timer assistent-whatsapp.path
 fi
 systemctl daemon-reload
 for u in $(getent group assistenten | cut -d: -f4 | tr , ' '); do

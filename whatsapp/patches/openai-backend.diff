@@ -1,0 +1,116 @@
+diff --git a/whatsapp-bridge/config.go b/whatsapp-bridge/config.go
+index acd9499..f3e08d9 100644
+--- a/whatsapp-bridge/config.go
++++ b/whatsapp-bridge/config.go
+@@ -34,11 +34,20 @@ type Config struct {
+ 	WhisperBinPath   string
+ 	WhisperModelPath string
+ 	WhisperAPIKey    string
+-	FFmpegBinPath    string
++	// WhisperAPIModel is the OpenAI transcription model. Separate from
++	// WhisperModel, whose "large-v3" default is a whisper.cpp file name the API
++	// rejects.
++	WhisperAPIModel string
++	FFmpegBinPath   string
+ 	// WhisperExcludeChats: normalized (lowercase, accent-stripped) substrings
+ 	// matched against chat JID and chat name; matching chats are never
+ 	// transcribed (privacy filter for personal chats).
+ 	WhisperExcludeChats []string
++	// WhisperOnlyChats: if non-empty, ONLY chats matching one of these
++	// patterns are transcribed. Local addition — upstream has just the
++	// exclude list, whose default (transcribe everything new) is wrong for an
++	// unattended run scoped to a named set of people.
++	WhisperOnlyChats []string
+ 
+ 	ScrubPromptInjection bool
+ 	AuditLog             bool
+@@ -95,7 +104,9 @@ func LoadConfig() (*Config, error) {
+ 		WhisperBinPath:          getenv("WHATSAPP_WHISPER_BIN_PATH", ""),
+ 		WhisperModelPath:        expandPath(getenv("WHATSAPP_WHISPER_MODEL_PATH", ""), home),
+ 		WhisperAPIKey:           getenv("WHATSAPP_WHISPER_API_KEY", ""),
++		WhisperAPIModel:         getenv("WHATSAPP_WHISPER_API_MODEL", "whisper-1"),
+ 		WhisperExcludeChats:     splitNormalizedCSV(getenv("WHATSAPP_WHISPER_EXCLUDE_CHATS", "")),
++		WhisperOnlyChats:        splitNormalizedCSV(getenv("WHATSAPP_WHISPER_ONLY_CHATS", "")),
+ 		FFmpegBinPath:           getenv("WHATSAPP_FFMPEG_BIN_PATH", ""),
+ 		ScrubPromptInjection:    getenvBool("WHATSAPP_SCRUB_PROMPT_INJECTION", true),
+ 		AuditLog:                getenvBool("WHATSAPP_AUDIT_LOG", true),
+diff --git a/whatsapp-bridge/server.go b/whatsapp-bridge/server.go
+index 12741fa..28dd22b 100644
+--- a/whatsapp-bridge/server.go
++++ b/whatsapp-bridge/server.go
+@@ -53,6 +53,9 @@ func (s *Server) registerRoutes() {
+ 
+ 	s.mux.HandleFunc("GET /api/chats", s.handleListChats)
+ 	s.mux.HandleFunc("GET /api/messages", s.handleListMessages)
++	// Lokaler Patch: das komplette Delta seit einem Zeitpunkt in einem Aufruf,
++	// damit ein naechtlicher Lauf nicht 40 sequenzielle Runden braucht (delta.go).
++	s.mux.HandleFunc("GET /api/messages/since", s.handleMessagesSince)
+ 	s.mux.HandleFunc("GET /api/contacts/search", s.handleSearchContacts)
+ 	s.mux.HandleFunc("GET /api/groups", s.handleListGroups)
+ 
+diff --git a/whatsapp-bridge/whisper.go b/whatsapp-bridge/whisper.go
+index d3fae3f..7e414c1 100644
+--- a/whatsapp-bridge/whisper.go
++++ b/whatsapp-bridge/whisper.go
+@@ -77,6 +77,13 @@ func (t *Transcriber) Enqueue(j transcriptionJob) {
+ 		// recovers recent voice notes.
+ 		return
+ 	}
++	if !t.chatAllowed(j.ChatJID) {
++		// Allow-list active and this chat is not on it. Same chokepoint as the
++		// exclude check, so it covers the live receive path and the backfill
++		// sweep alike.
++		log.Printf("transcriber: chat %s not on WHATSAPP_WHISPER_ONLY_CHATS; skipping %s", j.ChatJID, j.MessageID)
++		return
++	}
+ 	if t.chatExcluded(j.ChatJID) {
+ 		// Privacy filter: personal chats listed in WHATSAPP_WHISPER_EXCLUDE_CHATS
+ 		// are never transcribed. Single chokepoint — covers both the live
+@@ -177,19 +184,26 @@ func (t *Transcriber) process(ctx context.Context, workerID int, j transcription
+ 		return
+ 	}
+ 
+-	wavPath, err := t.convertToWav(ctx, oggPath, workDir)
+-	if err != nil {
+-		log.Printf("transcriber[%d]: ffmpeg convert failed for %s: %v", workerID, j.MessageID, err)
+-		return
++	// Only whisper.cpp needs the 16 kHz mono WAV. The OpenAI endpoint takes the
++	// original Opus container directly, which is far smaller — that keeps long
++	// memos under the 25 MB upload ceiling and means this backend needs no
++	// ffmpeg on the host at all.
++	audioPath := oggPath
++	if t.cfg.WhisperBackend == "local-cpp" {
++		audioPath, err = t.convertToWav(ctx, oggPath, workDir)
++		if err != nil {
++			log.Printf("transcriber[%d]: ffmpeg convert failed for %s: %v", workerID, j.MessageID, err)
++			return
++		}
+ 	}
+ 
+ 	// Transcribe.
+ 	var transcript string
+ 	switch t.cfg.WhisperBackend {
+ 	case "local-cpp":
+-		transcript, err = t.transcribeLocalCpp(ctx, wavPath)
++		transcript, err = t.transcribeLocalCpp(ctx, audioPath)
+ 	case "openai-api":
+-		transcript, err = t.transcribeOpenAI(ctx, wavPath)
++		transcript, err = t.transcribeOpenAI(ctx, audioPath)
+ 	}
+ 	if err != nil {
+ 		log.Printf("transcriber[%d]: whisper failed for %s: %v", workerID, j.MessageID, err)
+@@ -338,12 +352,8 @@ func (t *Transcriber) transcribeLocalCpp(ctx context.Context, wavPath string) (s
+ }
+ 
+ // --- OpenAI Whisper API -----------------------------------------------------
+-
+-func (t *Transcriber) transcribeOpenAI(_ context.Context, _ string) (string, error) {
+-	// Documented as opt-in. Implementation lands when a user actually opts in;
+-	// the boilerplate is a multipart/form-data POST to /v1/audio/transcriptions.
+-	return "", errors.New("openai-api backend scaffold: implementation pending (opt-in only; set WHATSAPP_WHISPER_BACKEND=local-cpp for now)")
+-}
++//
++// Implemented in whisper_openai.go (local patch; upstream ships a stub here).
+ 
+ // --- ffmpeg helper ----------------------------------------------------------
+ 

@@ -137,6 +137,10 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 
 **Rechte:** Claude läuft mit `--permission-mode auto`. Lehnt das Abo der Person den Modus ab (Selbsttest scheitert am Claude-Lauf), in `config.toml` `rechte = "dontAsk"` setzen: Dann darf der Assistent nur, was in `settings.json` freigegeben ist, und das reicht für alles im Kit. ChatGPT läuft in der Sandbox von Codex, schreiben darf es nur im Arbeitsordner, ins Netz darf es. Gemini läuft ohne Sandbox mit `--approval-mode yolo`, begrenzt nur durch den Linux-User.
 
+## WhatsApp (Erweiterung)
+
+Nur auf dem eigenen Server: Die Person schickt `/whatsapp`, scannt einen QR-Code, ab dann pflegt der Assistent nachts Notizen zu den Menschen im engen Kreis und schlägt morgens vor, wem sie schreiben könnte. Aufbau und Hinweise für die Person: `docs/whatsapp.md`.
+
 ## Stolperfallen
 
 - **Geheimnisse:** Für Claude sperren deny-Regeln `secrets.env` und `config.toml`. Codex und Gemini kennen solche Regeln nicht, sie könnten die Schlüssel der Person lesen. Die bleiben trotzdem in ihrem User, an fremde Instanzen kommen sie nicht

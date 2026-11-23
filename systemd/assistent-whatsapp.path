@@ -1,0 +1,9 @@
+[Unit]
+Description=WhatsApp-Erweiterung: Auftrag des Assistenten abholen (eigener Server)
+
+[Path]
+PathExists=/home/a-ich/.local/state/assistent/whatsapp-auftrag
+Unit=assistent-whatsapp.service
+
+[Install]
+WantedBy=paths.target

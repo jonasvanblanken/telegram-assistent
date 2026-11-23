@@ -41,6 +41,7 @@ def block(name):
 GOOGLE_BLOCK = block("google")
 BETREUT_BLOCK = block("betreut")   # Box mit Betreuer (ADMIN gesetzt)
 SELBST_BLOCK = block("selbst")     # eigener Server der Person, ohne Betreuer
+WHATSAPP_BLOCK = block("whatsapp")   # Erweiterung WhatsApp eingeschaltet
 PLATZHALTER = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 
@@ -72,7 +73,8 @@ def werte(cfg):
     return {"PERSON": cfg["person"]["name"], "ASSISTENT": cfg["assistent"]["name"], "ADMIN": cfg["admin"]["name"],
             "ZEITZONE": cfg["person"]["zeitzone"], "GOOGLE_KONTO": cfg["google"]["konto"],
             "GOOGLE_PORT": str(cfg["google"]["port"]), "HOME": kit.HOME_DIR, "INSTANZ": kit.INSTANZ, "KIT": KIT,
-            "HEUTE": datetime.date.today().isoformat()}
+            "HEUTE": datetime.date.today().isoformat(),
+            "WHATSAPP": "an" if cfg["whatsapp"]["status"] == "an" else ""}
 
 
 def rendern(text, w, google):
@@ -80,6 +82,7 @@ def rendern(text, w, google):
     betreut = bool(w.get("ADMIN"))
     text = BETREUT_BLOCK.sub(lambda m: m.group(1) if betreut else "", text)
     text = SELBST_BLOCK.sub(lambda m: "" if betreut else m.group(1), text)
+    text = WHATSAPP_BLOCK.sub(lambda m: m.group(1) if w.get("WHATSAPP") else "", text)
 
     def ersetze(m):
         if m.group(1) not in w:
@@ -210,6 +213,22 @@ def home_erneuern(w_alt, google_alt, w_neu, google_neu):
     return out
 
 
+def home_umschalten(w_alt, w_neu, google):
+    """Erweiterung an oder aus: unveränderte Vorlagen neu rendern, die Dateien des Kits (CLAUDE.md) immer."""
+    out = home_erneuern(w_alt, google, w_neu, google)
+    for rel in KIT_DATEIEN:
+        ziel = os.path.join(kit.HOME_DIR, rel)
+        if rel in out or not os.path.isfile(ziel):
+            continue
+        text = open(os.path.join(VORLAGE, "home", rel), encoding="utf-8").read()
+        neu = rendern(text, w_neu, google)
+        if open(ziel, encoding="utf-8").read() != neu:
+            schreibe(ziel, neu, 0o600)
+            stand_merken({rel: {"vorlage": _hash(text), "datei": _hash(neu)}})
+            out.append(rel)
+    return out
+
+
 def technik(cfg):
     """settings.json, mcp.json, google.env, Codex- und Gemini-Einstellungen und .gitignore aus config.toml."""
     w = werte(cfg)
@@ -244,7 +263,8 @@ def technik(cfg):
             f"GOOGLE_CLIENT_SECRET_PATH={GOOGLE_CLIENT}",
             f'GOOGLE_RECHTE="{google_rechte(cfg)}"',
             "OAUTHLIB_INSECURE_TRANSPORT=1", ""]))
-    schreibe(os.path.join(kit.INSTANZ, ".gitignore"), "home/eingang/\nhome/ausgang/\ngoogle.env\n*.tmp\n", 0o644)
+    schreibe(os.path.join(kit.INSTANZ, ".gitignore"), "home/eingang/\nhome/ausgang/\nhome/whatsapp/.sweep/\ngoogle.env\n*.tmp\n",
+             0o644)
 
 
 def main():
@@ -265,10 +285,24 @@ def main():
     a.add_argument("--effort", default="")
     a.add_argument("--rechte", default="auto")
     a.add_argument("--nachziehen", action="store_true", help="nur Technik aus der vorhandenen config.toml neu schreiben")
+    a.add_argument("--whatsapp", choices=["an", "aus"], help="Erweiterung WhatsApp schalten (ruft werkzeuge/whatsapp.py)")
     a.add_argument("--neu-config", action="store_true", help="vorhandene config.toml überschreiben")
     x = a.parse_args()
 
     os.makedirs(kit.INSTANZ, mode=0o700, exist_ok=True)
+    if x.whatsapp:
+        try:
+            alt = kit.lies_config()
+        except kit.ConfigFehler as e:
+            sys.exit(str(e))
+        kit.setze_config("whatsapp", "status", x.whatsapp)
+        cfg = kit.lies_config()
+        technik(cfg)
+        google = bool(cfg["google"]["konto"])
+        neu = home_umschalten(werte(alt), werte(cfg), google) \
+            if os.path.isfile(os.path.join(kit.HOME_DIR, "CLAUDE.md")) else []
+        print(f"WhatsApp {x.whatsapp}" + (f", erneuert: {', '.join(sorted(neu))}" if neu else ""))
+        return
     if not x.nachziehen and (x.neu_config or not os.path.exists(kit.CONFIG)):
         fehlt = [n for n in (() if x.web_adresse else ("person", "telegram_id", "assistent", "admin"))
                  if not getattr(x, n)]

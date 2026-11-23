@@ -25,7 +25,8 @@ STANDARD = {"person": {"zeitzone": "Europe/Berlin", "sprache": "de"},
             "assistent": {}, "admin": {},
             "ki": {"anbieter": "", "modell": "", "klein": "", "effort": "", "rechte": "auto"},
             "google": {"konto": "", "port": 0, "dienste": "kalender,mail"},
-            "web": {"adresse": "", "port": 0}}
+            "web": {"adresse": "", "port": 0},
+            "whatsapp": {"status": "aus"}}   # an: Erweiterung eingerichtet (nur eigener Server, /whatsapp im Chat)
 ANBIETER = ("claude", "chatgpt", "gemini")
 RECHTE = {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}   # Claude: --permission-mode
 RECHTE_ANDERE = {"auto", "voll"}
@@ -69,6 +70,8 @@ def lies_config(pfad=CONFIG):
     erlaubt = RECHTE if ki["anbieter"] in ("", "claude") else RECHTE_ANDERE
     if ki["rechte"] not in erlaubt | {"auto"}:
         raise ConfigFehler(f"[ki] rechte muss eins von {', '.join(sorted(erlaubt))} sein")
+    if cfg["whatsapp"]["status"] not in ("an", "aus"):
+        raise ConfigFehler('[whatsapp] status muss "an" oder "aus" sein')
     if cfg["web"]["adresse"]:
         if not re.fullmatch(r"https://[^/\s]+(/[a-z0-9-]+)?", cfg["web"]["adresse"]):
             raise ConfigFehler("[web] adresse muss so aussehen: https://box.example.de/kurzname")

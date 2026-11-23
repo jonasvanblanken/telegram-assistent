@@ -72,9 +72,10 @@ SELBST=1 NEU_TG_TOKEN="$TG_TOKEN" NEU_EINLADUNG="$EINLADUNG" bash /opt/pearl-kit
 SCHRITT="Abschluss"
 rm -f "$ENVDATEI"
 install -m 644 /opt/pearl-kit/systemd/assistent-aktualisieren.service /opt/pearl-kit/systemd/assistent-aktualisieren.timer \
-  /etc/systemd/system/
+  /opt/pearl-kit/systemd/assistent-whatsapp.path /opt/pearl-kit/systemd/assistent-whatsapp.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now assistent-aktualisieren.timer >/dev/null   # neue Fassungen kommen ab jetzt von selbst
+systemctl enable --now assistent-whatsapp.path >/dev/null         # /whatsapp im Chat: box/whatsapp.sh
 echo "Fertig: $(date -Is)"
 # Die Beschreibung „Dein persönlicher Assistent …“ hat assistent.py beim Start gesetzt, das ist das Fertig-Signal.
 # Falls Telegram das beim Start gedrosselt hat, hier noch einmal:

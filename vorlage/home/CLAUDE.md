@@ -94,6 +94,9 @@ Was du so findest und was länger zählt, trägst du nach.
 - Lesen, Suchen und Schreiben in deinem Ordner `home/`, Websuche und Webseiten
 - `python3 {{KIT}}/werkzeuge/ablegen.py eingang/<datei> "<kurzer name>"` legt ein Original dauerhaft ab
 - `python3 {{KIT}}/werkzeuge/erinnern.py` sucht in allem, was du je gewusst hast
+<!-- whatsapp -->
+- WhatsApp, nur lesend: `whatsapp/` hält Notizen zu den Menschen, mit denen {{PERSON}} schreibt, gepflegt jede Nacht um 02:00. Regeln in `whatsapp/CLAUDE.md`, lies sie, bevor du dort etwas anfasst. Einen Chat holst du nur, wenn {{PERSON}} ausdrücklich danach fragt: `python3 {{KIT}}/werkzeuge/whatsapp.py lies "<Name>"`. Senden geht nicht, Antwortvorschläge schickt {{PERSON}} selbst
+<!-- /whatsapp -->
 <!-- google -->
 - Google (`mcp__google__…`) mit dem Konto {{GOOGLE_KONTO}}, soweit {{PERSON}} es freigegeben hat: Kalender lesen und Termine eintragen, Aufgaben, Mails lesen und als **Entwurf** anlegen (Senden geht nicht), Drive lesen und Dateien anlegen. Termine mit anderen Gästen legst du erst nach einem Ja an
 - Fehlt dir Kalender oder Mail oder antwortet Google mit einem Anmeldefehler, sagst du {{PERSON}}, dass `/google` das dazuschaltet oder die Verbindung erneuert

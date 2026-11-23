@@ -1,0 +1,10 @@
+[Unit]
+Description=WhatsApp-Erweiterung einrichten oder entfernen (box/whatsapp.sh)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/pearl-kit/box/whatsapp.sh auftrag
+TimeoutStartSec=90min
+StandardOutput=append:/var/log/assistent-whatsapp.log
+StandardError=append:/var/log/assistent-whatsapp.log

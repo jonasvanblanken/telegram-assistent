@@ -951,3 +951,248 @@ class Wache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FalschesWhatsApp(http.server.BaseHTTPRequestHandler):
+    """Spielt Bridge (/api/status, /api/auth/qr) und Connector (/mcp/, tools/call) der WhatsApp-Erweiterung."""
+    jetzt = 0
+    chats = []
+    nachrichten = {}
+    gepaart = True
+    aufrufe = []
+
+    def log_message(self, *a):
+        pass
+
+    def senden(self, body):
+        daten = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(daten)))
+        self.end_headers()
+        self.wfile.write(daten)
+
+    def do_GET(self):
+        if self.path.startswith("/api/auth/qr"):
+            return self.senden({"qr_code": f"2@code-{int(time.time() // 2)}"})
+        self.senden({"auth_state": "paired" if self.gepaart else "unpaired"})
+
+    def do_POST(self):
+        n = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)))
+        name, args = n["params"]["name"], n["params"]["arguments"]
+        self.aufrufe.append((name, args, self.headers.get("Authorization")))
+        if name == "healthcheck":
+            r = {"timestamp": self.jetzt, "status_detail": {"connected": self.gepaart,
+                                                             "auth_state": "paired" if self.gepaart else "unpaired",
+                                                             "device_jid": "999:1@s.whatsapp.net"}}
+        elif name == "list_chats":
+            r = {"chats": self.chats[args.get("offset", 0):args.get("offset", 0) + args["limit"]]}
+        else:
+            r = {"messages": sorted(self.nachrichten.get(args["chat_jid"], []), key=lambda m: -m["timestamp"])}
+        self.senden({"jsonrpc": "2.0", "id": n["id"], "result": {"structuredContent": {"result": r}}})
+
+
+class WhatsApp(Chat, unittest.TestCase):
+    """Erweiterung WhatsApp: Werkzeug gegen einen falschen Connector, Einrichtung im Chat gegen eine falsche Bridge."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.port, cls.wa_port = freier_port(), freier_port()
+        cls.srv = server_starten(cls.port)
+        cls.wa = http.server.ThreadingHTTPServer(("127.0.0.1", cls.wa_port), FalschesWhatsApp)
+        threading.Thread(target=cls.wa.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.wa.shutdown()
+
+    def setUp(self):
+        FalscherServer.anfragen.clear()
+        FalschesWhatsApp.aufrufe.clear()
+        FalschesWhatsApp.gepaart = True
+        self.inst = Instanz(google=False, port=self.port)
+        t = self.inst.tmp.name
+        os.makedirs(f"{t}/wa")
+        with open(f"{t}/wa/token", "w") as f:
+            f.write("ab" * 32)
+        with open(f"{t}/unit.path", "w") as f:
+            f.write("")
+        self.inst.env.update({"WHATSAPP_TOKEN_DATEI": f"{t}/wa/token", "ASSISTENT_WA_DIR": f"{t}/wa",
+                              "WHATSAPP_MCP_URL": f"http://127.0.0.1:{self.wa_port}/mcp/",
+                              "ASSISTENT_WA_API": f"http://127.0.0.1:{self.wa_port}/api",
+                              "ASSISTENT_WA_UNIT": f"{t}/unit.path", "ASSISTENT_WA_TAKT": "0.2"})
+        self.home = os.path.join(self.inst.env["ASSISTENT_DIR"], "home")
+
+    def tearDown(self):
+        for k in ("WHATSAPP_TOKEN_DATEI", "ASSISTENT_WA_DIR", "WHATSAPP_MCP_URL", "ASSISTENT_WA_API", "ASSISTENT_WA_UNIT",
+                  "ASSISTENT_WA_TAKT"):
+            os.environ.pop(k, None)
+        self.inst.weg()
+
+    def werkzeug(self, *args):
+        r = subprocess.run([sys.executable, os.path.join(KIT, "werkzeuge", "whatsapp.py"), *args],
+                           env={**os.environ, **self.inst.env}, capture_output=True, text=True, cwd=self.home)
+        return r.returncode, r.stdout + r.stderr
+
+    def lesestand(self, wert):
+        pfad = os.path.join(self.home, "whatsapp", "Sweep-State.md")
+        text = re.sub(r"^\| Chatliste \| \d+ \|", f"| Chatliste | {wert} |", open(pfad).read(), flags=re.M)
+        with open(pfad, "w") as f:
+            f.write(text)
+
+    def bericht(self, status="ok"):
+        heute = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        with open(os.path.join(self.home, "whatsapp", "Sweep-Report.md"), "w") as f:
+            f.write(f"---\ntype: sweep-report\nrun_at: {heute}\nrun_status: {status}\n---\n")
+
+    def test_einrichten_und_abschalten(self):
+        code, aus = self.werkzeug("einrichten")
+        self.assertEqual(code, 0, aus)
+        claude = open(os.path.join(self.home, "CLAUDE.md")).read()
+        self.assertIn("whatsapp.py lies", claude)
+        self.assertIn("whatsapp/heute.md", open(os.path.join(self.home, "jobs", "morgen.md")).read())
+        jobs = sorted(os.listdir(os.path.join(self.home, "jobs")))
+        self.assertIn("whatsapp-nacht.md", jobs)
+        self.assertIn("whatsapp-kreis.md", jobs)
+        self.assertNotIn("whatsapp-morgen.md", jobs)   # der Morgen-Check kennt die Vorschläge schon
+        for wurzel, _, dateien in os.walk(self.home):
+            for d in dateien:
+                text = open(os.path.join(wurzel, d), encoding="utf-8").read()
+                self.assertNotIn("{{", text, d)
+                self.assertNotIn("<!--", text, d)
+        self.assertIn("WHATSAPP_MCP_TOKEN=" + "ab" * 32, open(self.inst.env["ASSISTENT_SECRETS"]).read())
+        self.assertIn('status = "an"', open(os.path.join(self.inst.env["ASSISTENT_DIR"], "config.toml")).read())
+        self.assertIn("home/whatsapp/.sweep/", open(os.path.join(self.inst.env["ASSISTENT_DIR"], ".gitignore")).read())
+        a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        j = a.jobs()
+        self.assertEqual(j["whatsapp-nacht"]["vorher"], "werkzeuge/whatsapp.py hole")
+        self.assertTrue(j["whatsapp-kreis"]["datum"])
+        with open(os.path.join(self.home, "whatsapp", "personen", "Anna Test.md"), "w") as f:
+            f.write("# Anna Test\n")
+        code, aus = self.werkzeug("abschalten")
+        self.assertEqual(code, 0, aus)
+        self.assertFalse(glob.glob(os.path.join(self.home, "jobs", "whatsapp-*")))
+        self.assertNotIn("whatsapp.py lies", open(os.path.join(self.home, "CLAUDE.md")).read())
+        self.assertNotIn("WHATSAPP_MCP_TOKEN", open(self.inst.env["ASSISTENT_SECRETS"]).read())
+        self.assertTrue(os.path.exists(os.path.join(self.home, "whatsapp", "personen", "Anna Test.md")))
+
+    def test_delta_warteschlange_und_pruefung(self):
+        self.assertEqual(self.werkzeug("einrichten")[0], 0)
+        jetzt = int(time.time())
+        wm = jetzt - 86400
+        self.lesestand(wm)
+        FalschesWhatsApp.jetzt = jetzt
+        FalschesWhatsApp.chats = [
+            {"jid": "111@s.whatsapp.net", "name": "Anna Test", "last_message_time": jetzt - 100},
+            {"jid": "222@g.us", "name": "Gruppe", "chat_type": "group", "last_message_time": jetzt},
+            {"jid": "333@s.whatsapp.net", "name": "Ben Test", "last_message_time": wm - 500},
+            {"jid": "444@s.whatsapp.net", "name": "Carla Test", "last_message_time": jetzt - 300},
+            {"jid": "999@s.whatsapp.net", "name": "Ich selbst", "last_message_time": jetzt - 10}]
+        FalschesWhatsApp.nachrichten = {
+            "111@s.whatsapp.net": [
+                {"id": "a1", "timestamp": jetzt - 200, "is_from_me": False, "sender_display": "Anna Test",
+                 "content_text": "Sehen wir uns Freitag?", "type": "text"},
+                {"id": "a2", "timestamp": jetzt - 50000, "is_from_me": True, "content_text": "Bin zurück", "type": "text"},
+                {"id": "a3", "timestamp": wm - 10, "is_from_me": False, "content_text": "alt", "type": "text"}],
+            "444@s.whatsapp.net": [{"id": "c1", "timestamp": jetzt - 300, "is_from_me": False,
+                                    "sender_display": "Carla Test", "type": "voice", "content_text": ""}]}
+        code, aus = self.werkzeug("hole", "--max-chats", "1")
+        self.assertEqual(code, 0, aus)
+        delta = json.load(open(os.path.join(self.home, "whatsapp", ".sweep", "delta.json")))
+        self.assertEqual(delta["status"], "partial")
+        self.assertEqual([c["chat"] for c in delta["delta"]], ["Anna Test"])
+        self.assertEqual(delta["delta"][0]["anzahl"], 2)
+        self.assertIn("Testperson: Bin zurück", delta["delta"][0]["nachrichten"][1])
+        self.assertEqual(delta["zurueckgestellt"], ["Carla Test"])
+        self.assertEqual(delta["watermark_neu"], jetzt)
+        self.assertTrue(all(a[2] == "Bearer " + "ab" * 32 for a in FalschesWhatsApp.aufrufe))
+        self.assertNotIn("111@", json.dumps(delta))   # keine Kennungen in home/
+
+        # Lauf ohne neuen Lesestand: die Person bekommt Bescheid
+        self.bericht("partial")
+        code, aus = self.werkzeug("pruefe")
+        self.assertEqual(code, 1, aus)
+        self.assertIn("nicht weitergerückt", aus)
+
+        # Lauf wie vorgesehen: Plan übernommen, Carla kommt in der nächsten Nacht zuerst
+        self.lesestand(jetzt)
+        code, aus = self.werkzeug("pruefe")
+        self.assertEqual(code, 0, aus)
+        FalschesWhatsApp.jetzt = jetzt + 60
+        code, aus = self.werkzeug("hole")
+        self.assertEqual(code, 0, aus)
+        delta = json.load(open(os.path.join(self.home, "whatsapp", ".sweep", "delta.json")))
+        self.assertEqual(delta["delta"][0]["chat"], "Carla Test")
+        self.assertTrue(delta["delta"][0]["aus_warteschlange"])
+        self.assertIn("[Sprachnachricht ohne Transkript]", delta["delta"][0]["nachrichten"][0])
+        self.assertEqual(delta["status"], "ok")
+
+        code, aus = self.werkzeug("lies", "anna")
+        self.assertEqual(code, 0, aus)
+        self.assertIn("Sehen wir uns Freitag?", aus)
+        self.assertEqual(self.werkzeug("lies", "Test")[0], 1)   # mehrdeutig
+
+    def test_nicht_verbunden(self):
+        self.assertEqual(self.werkzeug("einrichten")[0], 0)
+        FalschesWhatsApp.gepaart = False
+        code, aus = self.werkzeug("hole")
+        self.assertEqual(code, 2)
+        self.assertIn("FAILED", aus)
+        self.bericht("failed")
+        code, aus = self.werkzeug("pruefe")
+        self.assertEqual(code, 1)
+        self.assertIn("/whatsapp", aus)
+
+    def test_einrichtung_im_chat(self):
+        os.environ.update(self.inst.env)
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.nachricht("/whatsapp")
+        self.assertTrue(any("eigenen Server" in t for t in self.gesendet()))   # Box mit Betreuer: geht nicht
+        self.a.ADMIN = ""
+        FalscherServer.anfragen.clear()
+        self.nachricht("/whatsapp")
+        self.assertTrue(any("/whatsapp_ja" in t and "inoffizielles" in t for t in self.gesendet()))
+
+        bilder = []
+        self.a.wa_qr_bild = lambda code: (bilder.append(code), _png(self.inst.tmp.name))[1]   # ohne qrencode
+        FalschesWhatsApp.gepaart = False
+        stand = os.path.join(self.inst.tmp.name, "wa", "stand")
+        FalscherServer.anfragen.clear()
+        self.nachricht("/whatsapp_ja")
+        self.assertEqual(open(self.a.WA_AUFTRAG).read().strip(), "an")
+        os.remove(self.a.WA_AUFTRAG)   # hier holt sonst root den Auftrag ab
+        def bis(bedingung, sekunden=15):
+            ende = time.time() + sekunden
+            while time.time() < ende and not bedingung():
+                time.sleep(0.1)
+            return bedingung()
+
+        with open(stand, "w") as f:
+            f.write("baut")
+        time.sleep(0.5)
+        with open(stand, "w") as f:
+            f.write("bereit")
+        self.assertTrue(bis(lambda: "sendPhoto" in [x.get("methode") for x in FalscherServer.anfragen]), "kein QR-Code")
+        self.assertTrue(bilder)
+        FalschesWhatsApp.gepaart = True
+        with open(stand, "w") as f:
+            f.write("verknuepft")
+        self.assertTrue(bis(lambda: "deleteMessage" in [x.get("methode") for x in FalscherServer.anfragen]))
+        with open(stand, "w") as f:
+            f.write("fertig")
+        ende = time.time() + 20
+        while time.time() < ende and self.a._wa_faden.is_alive():
+            time.sleep(0.5)
+        texte = self.gesendet()
+        self.assertTrue(any("eingerichtet" in t for t in texte), texte)
+        self.assertEqual(self.a.wa_status(), "an")
+        self.assertTrue(os.path.exists(os.path.join(self.home, "jobs", "whatsapp-nacht.md")))
+        self.assertIsNone(self.a.load().get("whatsapp"))
+
+
+def _png(ordner):
+    pfad = os.path.join(ordner, "qr.png")
+    with open(pfad, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+    return pfad
