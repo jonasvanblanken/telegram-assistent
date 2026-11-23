@@ -694,7 +694,10 @@ class Einladung(Chat, unittest.TestCase):
         self.a.einladungslink()
         self.nachricht("/start falsch", von=777, vorname="Mara")
         self.nachricht("Hallo", von=777)
-        self.assertEqual(self.gesendet(warten=0.5), [])
+        self.nachricht("/start", von=777)
+        g = self.gesendet(warten=0.5)
+        self.assertEqual(len(g), 1, g)                     # ein Hinweis auf den Link, nicht mehr
+        self.assertIn("QR-Code", str(g[0]))
         self.assertEqual(self.a.PERSON_ID, 0)
         t = self.binden()
         self.assertEqual((self.a.PERSON_ID, self.a.PERSON), (777, "Mara"))

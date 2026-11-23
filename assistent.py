@@ -228,13 +228,21 @@ def einrichten_hinweis(immer=False, wo=""):
 anmelden_hinweis = einrichten_hinweis   # alter Name
 
 
+OHNE_CODE_GEANTWORTET = set()
+
+
 def binden(frm, text):
     """Erste Nachricht über den Einladungslink: Dieses Telegram-Konto gehört ab jetzt zum Assistenten."""
     global PERSON_ID, PERSON
     code, teile = secret("EINLADUNG"), text.split()
     if not (code and len(teile) == 2 and teile[0].lower().split("@")[0] == "/start"
             and hmac.compare_digest(teile[1], code)):
-        return log(f"Fremdes Konto {frm.get('id')} ignoriert (noch niemand verbunden)")
+        log(f"Fremdes Konto {frm.get('id')} ignoriert (noch niemand verbunden)")
+        if teile and teile[0].lower().split("@")[0] == "/start" and frm.get("id") not in OHNE_CODE_GEANTWORTET:
+            OHNE_CODE_GEANTWORTET.add(frm.get("id"))   # einmal je Konto, mehr verrät der Bot Fremden nicht
+            sende_text("Öffne mich bitte über den Link oder den QR-Code aus der Anleitung, dann tipp auf Starten. "
+                       "Darin steckt dein persönlicher Code.", chat=frm["id"])
+        return
     PERSON_ID = int(frm["id"])
     kit.setze_config("person", "telegram_id", PERSON_ID)
     kit.setze_secret("EINLADUNG", "")
