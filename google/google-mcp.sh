@@ -12,6 +12,9 @@ set -a
 set +a
 unset WORKSPACE_MCP_HOST
 mkdir -p "$WORKSPACE_MCP_CREDENTIALS_DIR" "$WORKSPACE_ATTACHMENT_DIR"
+# Abgelegte Originale darf der Dienst nach Drive hochladen (create_drive_file mit file://), sonst nichts aus home/
+export ALLOWED_FILE_DIRS="$INSTANZ/home/leben/ablage"
+mkdir -p "$ALLOWED_FILE_DIRS"
 chmod 700 "$WORKSPACE_MCP_CREDENTIALS_DIR"
 exec "$KIT/.venv-google/bin/python3" "$KIT/google/google-mcp-auth.py" \
   --transport streamable-http --single-user \

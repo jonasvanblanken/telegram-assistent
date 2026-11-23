@@ -103,7 +103,8 @@ GESPERRT = "GESPERRT: KI-Kontingent aufgebraucht"
 WOCHENTAG = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 MONATE = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 LAUF_NAMEN = {"morgen": "Morgen-Check-in", "abend": "Abend-Check-in", "wochenrueckblick": "Wochenrückblick",
-              "herzschlag": "Herzschlag", "tagesabschluss": "Tagesabschluss"}
+              "herzschlag": "Herzschlag", "tagesabschluss": "Tagesabschluss",
+              "vorstellen": "Vorstellen"}
 HILFE = ("Schreib mir einfach, auch Sprachnachrichten, Fotos und Dateien.\n"
          "/status  was gerade läuft\n"
          + ("/google  Kalender und Mail verbinden\n" if GOOGLE_KONTO or (WEB and GOOGLE_PORT) else "")
