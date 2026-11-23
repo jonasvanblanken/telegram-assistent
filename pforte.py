@@ -14,6 +14,9 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
   POST /einrichten/fertig          {t}            home/ anlegen, der Assistent stellt sich im Chat vor
   GET  /oauth2callback?...         Rückweg von Google, geht an den Google-Dienst der Instanz
+  GET  /whatsapp?t=<wa-link>       WhatsApp verbinden (eigener Link, gilt sieben Tage)
+  GET  /whatsapp/stand?t=<wa-link> Schritt als JSON, beim QR-Code mit Bild
+  POST /whatsapp/start             {t}  Einwilligung, der Server richtet die Bridge ein
 
 Die Login-Programme laufen als die Person in einem Pseudo-Terminal, genau wie am Rechner: `claude setup-token`,
 `codex login --device-auth`, `gemini` mit NO_BROWSER=true. Die Seite liest daraus den Link (bei ChatGPT den
@@ -544,12 +547,84 @@ def ergebnisseite(name, bot, gut):
     return seite(name, "Google", "Google", "Das hat nicht geklappt, der Link war vielleicht schon alt.", inhalt)
 
 
+def whatsapp_seite(name, bot):
+    """WhatsApp verbinden: Einwilligung, Bau auf dem Server, QR-Code, fertig. Die Seite fragt alle drei Sekunden
+    /whatsapp/stand ab und zeigt immer nur den Abschnitt zum aktuellen Schritt."""
+    inhalt = f"""
+<section id="frage" hidden>
+  <div class="karte"><div class="schritt"><span class="kachel">{ICON["sprechblase"]}</span><div><b>Was ich mache</b>
+    <p>Jede Nacht lese ich deine Einzelchats und halte zu den Menschen, die dir wichtig sind, kurz fest, was sich tut.
+    Morgens sage ich dir, wem du noch antworten wolltest, und du kannst mich fragen, was jemand geschrieben hat.
+    Gruppen lasse ich aus. In WhatsApp schreibe ich nie, wir bleiben hier in Telegram.</p></div></div></div>
+  <div class="karte"><div class="schritt"><span class="kachel">{ICON["schloss"]}</span><div><b>Gut zu wissen</b>
+    <p>Die Verbindung läuft über ein inoffizielles Programm, das sich wie WhatsApp Web anmeldet. WhatsApp sieht so
+    etwas nicht gern und kann die Verknüpfung im schlimmsten Fall sperren.</p>
+    <p>Deine Kontakte haben nicht zugestimmt. Sag es den Menschen, die dir nah sind, eine Vorlage dafür schreibe ich
+    dir gern. Deine Nachrichten liegen verschlüsselt auf deinem Server, niemand sonst kommt dran.</p></div></div></div>
+  <p class="fehler" id="start-fehler" hidden></p>
+  <button class="knopf" id="start">Einverstanden, verbinden</button>
+</section>
+<section id="baut" hidden><div class="karte"><div class="schritt"><span class="kachel gruen"><span class="warte"></span></span>
+  <div><b>Ich richte WhatsApp ein</b><p>Beim ersten Mal dauert das zehn bis fünfzehn Minuten. Du kannst die Seite
+  schließen, im Chat sage ich dir Bescheid, sobald der QR-Code da ist.</p></div></div></div></section>
+<section id="qr" hidden><div class="karte">
+  <img id="qr-bild" alt="QR-Code für WhatsApp" width="300" height="300"
+   style="display:block;margin:0 auto 18px;width:min(300px,100%);height:auto;background:#fff;border-radius:12px">
+  <div class="schritt"><span class="kachel">1</span><p>Öffne WhatsApp auf deinem Handy.</p></div>
+  <div class="schritt"><span class="kachel">2</span><p>iPhone: Einstellungen. Android: Menü ⋮ oben rechts. Dann
+  „Verknüpfte Geräte“ und „Gerät hinzufügen“.</p></div>
+  <div class="schritt"><span class="kachel">3</span><p>Halte das Handy auf diesen Code. Er erneuert sich von selbst.</p></div>
+  <p style="color:var(--vb-grau);font-size:15px;margin-bottom:0">Siehst du diese Seite gerade auf dem Handy? Dann öffne den Chat mit mir am Laptop und tipp dort auf
+  „QR-Code zeigen“.</p>
+</div></section>
+<section id="verknuepft" hidden><div class="karte"><div class="schritt"><span class="kachel gruen"><span class="warte"></span></span>
+  <div><b>Verbunden</b><p>Gerade kommen deine Kontakte an, das dauert zwei, drei Minuten.</p></div></div></div></section>
+<section id="fertig" hidden><div class="buehne"><span class="kachel">{ICON["haken"]}</span><b>Fertig</b>
+  Im Chat frage ich dich gleich, wer dir nah ist. Ab heute Nacht lese ich mit.
+  <button class="knopf hell" id="zu-telegram">Zu Telegram</button></div></section>
+<section id="fehler" hidden><div class="karte"><div class="schritt"><span class="kachel">{ICON["kreuz"]}</span>
+  <div><b>Das hat nicht geklappt</b><p id="fehler-text"></p></div></div>
+  <button class="knopf" id="nochmal">Noch einmal versuchen</button></div></section>"""
+    skript = """<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+const BOT=__BOT__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
+if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
+const T=new URLSearchParams(location.search).get('t')||'',$=id=>document.getElementById(id);
+const TEILE=['frage','baut','qr','verknuepft','fertig','fehler'];
+let qr='';
+function zeige(s){TEILE.forEach(n=>$(n).hidden=n!==s)}
+async function stand(){
+  try{const r=await fetch('whatsapp/stand?t='+encodeURIComponent(T),{cache:'no-store'});const d=await r.json();
+    if(!r.ok){$('fehler-text').textContent=d.fehler||'Der Link ist abgelaufen. Schick mir /whatsapp.';$('nochmal').hidden=true;
+      return zeige('fehler')}
+    if(d.schritt==='qr'&&d.qr&&d.qr!==qr){qr=d.qr;$('qr-bild').src=d.qr}
+    if(d.schritt==='fehler'){$('fehler-text').textContent=d.fehler||'';$('nochmal').hidden=false}
+    zeige(d.schritt)}catch(e){}
+}
+async function starten(knopf){
+  knopf.disabled=true;$('start-fehler').hidden=true;
+  try{const r=await fetch('whatsapp/start',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({t:T})});const d=await r.json();
+    if(!d.ok){$('start-fehler').textContent=d.fehler||'Das ging gerade nicht.';$('start-fehler').hidden=false;zeige('frage')}
+    else zeige('baut')}
+  catch(e){$('start-fehler').textContent='Keine Verbindung zum Server. Versuch es gleich noch einmal.';$('start-fehler').hidden=false}
+  knopf.disabled=false;
+}
+$('start').onclick=()=>starten($('start'));
+$('nochmal').onclick=()=>starten($('nochmal'));
+$('zu-telegram').onclick=()=>{if(tg)tg.close();else if(BOT)location.href='https://t.me/'+BOT};
+stand();setInterval(stand,3000);
+</script>""".replace("__BOT__", json.dumps(bot or ""))
+    return seite(name, "WhatsApp", "WhatsApp", "Ich lese deine Einzelchats mit, wir schreiben weiter hier in Telegram.",
+                 inhalt, skript)
+
+
 # --- Server --------------------------------------------------------------------
 
 class Pforte:
     """hooks: name(), bot(), link_gueltig(t), fertig(anbieter), google(query) -> bool, stand() -> dict,
     namen(person, assistent) -> fehler, google_start(konto, dienste) -> (url, fehler), google_aus(),
-    abschliessen() -> fehler"""
+    abschliessen() -> fehler, wa_link_gueltig(t), wa_stand() -> dict, wa_start() -> fehler"""
 
     def __init__(self, hooks):
         self.hooks, self.anmeldung, self.lock = hooks, None, threading.Lock()
@@ -609,6 +684,16 @@ def handler_fuer(pforte):
                 if not h["link_gueltig"](t) and not (login and login["stand"] == "fertig"):
                     return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen."})
                 return self.senden(200, {**h["stand"](), "login": login})
+            if teile.path == "/whatsapp" and "wa_stand" in h:
+                if not h["wa_link_gueltig"](t):
+                    return self.senden(403, seite(name, "Link abgelaufen", "Abgelaufen",
+                                                  "Schick deinem Bot /whatsapp, dann bekommst du einen neuen Link.", ""),
+                                       "text/html")
+                return self.senden(200, whatsapp_seite(name, h["bot"]()), "text/html")
+            if teile.path == "/whatsapp/stand" and "wa_stand" in h:
+                if not h["wa_link_gueltig"](t):
+                    return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen. Schick deinem Bot /whatsapp."})
+                return self.senden(200, h["wa_stand"]())
             self.senden(404, "Nicht gefunden", "text/plain")
 
         def do_POST(self):
@@ -620,6 +705,11 @@ def handler_fuer(pforte):
                 d = json.loads(self.rfile.read(laenge) or b"{}")
             except ValueError:
                 return self.senden(400, {"ok": False})
+            if self.path == "/whatsapp/start" and "wa_start" in h:
+                if not isinstance(d, dict) or not h["wa_link_gueltig"](str(d.get("t") or "")):
+                    return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen. Schick deinem Bot /whatsapp."})
+                f = h["wa_start"]()
+                return self.senden(200, {"ok": not f, "fehler": f})
             if not isinstance(d, dict) or not h["link_gueltig"](str(d.get("t") or "")):
                 return self.senden(403, {"ok": False, "stand": "fehler",
                                          "fehler": "Der Link ist abgelaufen. Schick deinem Bot /start."})

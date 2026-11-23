@@ -4,7 +4,7 @@ Für Menschen, die schon einen Assistenten auf ihrem eigenen Server haben. Der A
 
 ## Einschalten
 
-Die Person schickt ihrem Assistenten `/whatsapp`. Er erklärt, was passiert, und wartet auf `/whatsapp_ja`. Dann baut der Server die Verbindung (beim ersten Mal 10 bis 15 Minuten) und der Assistent schickt einen QR-Code, der sich von selbst erneuert. Gescannt wird mit dem Handy unter Verknüpfte Geräte, der Code muss deshalb auf einem zweiten Bildschirm stehen, etwa Telegram am Laptop. Nach dem Scan fragt der Assistent, wer eng und wer nah ist, und legt dazu Notizen an. Der erste Nachtlauf um 02:00 liest 30 Tage zurück.
+Der Assistent bietet WhatsApp einmal von selbst an, tagsüber und frühestens drei Tage nach der Begrüßung, mit den Knöpfen „WhatsApp verbinden“, „Später“ und „Nein danke“. Ohne Antwort fragt er nach einer Woche ein zweites Mal, danach nur noch auf `/whatsapp`. „WhatsApp verbinden“ öffnet die Seite `/whatsapp` der Einrichtungsseite in Telegram (eigener Link, gilt sieben Tage). Dort stehen Funktionen und Risiken, eingewilligt wird mit „Einverstanden, verbinden“. Dann baut der Server die Verbindung (beim ersten Mal 10 bis 15 Minuten). Sobald der QR-Code da ist, meldet sich der Assistent im Chat mit dem Knopf „QR-Code zeigen“. Die Seite zeigt den Code, er erneuert sich von selbst und verlässt den Server nie. Gescannt wird mit dem Handy unter Verknüpfte Geräte, die Seite muss deshalb auf einem zweiten Bildschirm offen sein, etwa Telegram am Laptop. Nach dem Scan fragt der Assistent, wer eng und wer nah ist, und legt dazu Notizen an. Der erste Nachtlauf um 02:00 liest 30 Tage zurück.
 
 - `/whatsapp` zeigt den Stand
 - `/whatsapp_neu` richtet neu ein, etwa wenn das Handy die Verknüpfung gelöst hat

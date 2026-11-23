@@ -243,7 +243,7 @@ class Chat:
         self.gesendet(warten)
         out = []
         for x in FalscherServer.anfragen:
-            if x.get("methode") == "sendMessage" and x["daten"].get("reply_markup"):
+            if x.get("methode") == "sendMessage" and "inline_keyboard" in x["daten"].get("reply_markup", ""):
                 k = json.loads(x["daten"]["reply_markup"])["inline_keyboard"][0][0]
                 out.append((x["daten"]["text"], k["text"], (k.get("web_app") or {}).get("url") or k.get("url")))
         return out
@@ -1144,51 +1144,135 @@ class WhatsApp(Chat, unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("/whatsapp", aus)
 
-    def test_einrichtung_im_chat(self):
+    def test_einrichtung_ueber_die_seite(self):
+        web = freier_port()
+        self.inst.weg()
+        self.inst = Instanz(google=False, port=self.port, web_port=web)
+        t = self.inst.tmp.name
+        os.makedirs(f"{t}/wa")
+        with open(f"{t}/wa/token", "w") as f:
+            f.write("ab" * 32)
+        with open(f"{t}/unit.path", "w") as f:
+            f.write("")
+        self.inst.env.update({"WHATSAPP_TOKEN_DATEI": f"{t}/wa/token", "ASSISTENT_WA_DIR": f"{t}/wa",
+                              "WHATSAPP_MCP_URL": f"http://127.0.0.1:{self.wa_port}/mcp/",
+                              "ASSISTENT_WA_API": f"http://127.0.0.1:{self.wa_port}/api",
+                              "ASSISTENT_WA_UNIT": f"{t}/unit.path", "ASSISTENT_WA_TAKT": "0.2"})
+        self.home = os.path.join(self.inst.env["ASSISTENT_DIR"], "home")
         os.environ.update(self.inst.env)
         self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
         self.nachricht("/whatsapp")
-        self.assertTrue(any("eigenen Server" in t for t in self.gesendet()))   # Box mit Betreuer: geht nicht
+        self.assertTrue(any("eigenen Server" in x for x in self.gesendet()))   # Box mit Betreuer: geht nicht
         self.a.ADMIN = ""
-        FalscherServer.anfragen.clear()
-        self.nachricht("/whatsapp")
-        self.assertTrue(any("/whatsapp_ja" in t and "inoffizielles" in t for t in self.gesendet()))
+        pf_srv, _ = self.a.pforte_starten()
+        self.addCleanup(pf_srv.shutdown)
 
-        bilder = []
-        self.a.wa_qr_bild = lambda code: (bilder.append(code), _png(self.inst.tmp.name))[1]   # ohne qrencode
-        FalschesWhatsApp.gepaart = False
-        stand = os.path.join(self.inst.tmp.name, "wa", "stand")
-        FalscherServer.anfragen.clear()
-        self.nachricht("/whatsapp_ja")
-        self.assertEqual(open(self.a.WA_AUFTRAG).read().strip(), "an")
-        os.remove(self.a.WA_AUFTRAG)   # hier holt sonst root den Auftrag ab
+        def holen(pfad):
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{web}{pfad}", timeout=10) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()
+
+        def stand(tok):
+            return json.loads(holen(f"/whatsapp/stand?t={tok}")[1])
+
         def bis(bedingung, sekunden=15):
             ende = time.time() + sekunden
             while time.time() < ende and not bedingung():
                 time.sleep(0.1)
             return bedingung()
 
-        with open(stand, "w") as f:
-            f.write("baut")
-        time.sleep(0.5)
-        with open(stand, "w") as f:
+        # Von selbst: nicht in den ersten Tagen nach der Begrüßung, später tagsüber einmal
+        self.a.update(begruesst=time.time())
+        self.assertFalse(self.a.wa_anbieten())
+        self.a.update(begruesst=time.time() - 4 * 86400)
+        self.a.jetzt = lambda: datetime.datetime(2026, 11, 24, 7, 0).astimezone()
+        self.assertFalse(self.a.wa_anbieten())
+        self.a.jetzt = lambda: datetime.datetime(2026, 11, 24, 11, 0).astimezone()
+        FalscherServer.anfragen.clear()
+        self.assertTrue(self.a.wa_anbieten())
+        self.assertFalse(self.a.wa_anbieten())   # nicht doppelt
+        angebot = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"][-1]
+        self.assertIn("in WhatsApp schreibe ich nie", angebot["text"])
+        tastatur = json.loads(angebot["reply_markup"])["keyboard"]
+        url = tastatur[0][0]["web_app"]["url"]
+        self.assertTrue(url.startswith("https://box.example.de/test/whatsapp?t="))
+        tok = url.split("t=", 1)[1]
+        self.nachricht("Später")
+        self.assertTrue(any("in einer Woche" in x for x in self.gesendet()))
+        self.assertFalse(self.a.wa_anbieten())
+
+        # Seite: falscher Link nein, richtiger ja
+        self.assertEqual(holen("/whatsapp?t=falsch")[0], 403)
+        code, seite = holen(f"/whatsapp?t={tok}")
+        self.assertEqual(code, 200)
+        self.assertIn("Einverstanden, verbinden", seite)
+        self.assertEqual(stand(tok)["schritt"], "frage")
+
+        bilder = []
+        self.a.wa_qr_bild = lambda c: (bilder.append(c), "data:image/svg+xml;base64,AAAA")[1]   # ohne qrencode
+        FalschesWhatsApp.gepaart = False
+        FalscherServer.anfragen.clear()
+        req = urllib.request.Request(f"http://127.0.0.1:{web}/whatsapp/start", data=json.dumps({"t": tok}).encode(),
+                                     headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertTrue(json.loads(r.read())["ok"])
+        self.assertEqual(open(self.a.WA_AUFTRAG).read().strip(), "an")
+        os.remove(self.a.WA_AUFTRAG)   # hier holt sonst root den Auftrag ab
+        self.assertTrue(any("zehn bis fünfzehn Minuten" in x for x in self.gesendet()))
+        self.assertEqual(stand(tok)["schritt"], "baut")
+
+        datei = os.path.join(t, "wa", "stand")
+        with open(datei, "w") as f:
             f.write("bereit")
-        self.assertTrue(bis(lambda: "sendPhoto" in [x.get("methode") for x in FalscherServer.anfragen]), "kein QR-Code")
-        self.assertTrue(bilder)
+        self.assertTrue(bis(lambda: any(k[1] == "QR-Code zeigen" for k in self.knoepfe(0))), "kein Knopf zum QR-Code")
+        s = stand(tok)
+        self.assertEqual(s["schritt"], "qr")
+        self.assertTrue(s["qr"].startswith("data:image/svg+xml") and bilder)
         FalschesWhatsApp.gepaart = True
-        with open(stand, "w") as f:
+        with open(datei, "w") as f:
             f.write("verknuepft")
-        self.assertTrue(bis(lambda: "deleteMessage" in [x.get("methode") for x in FalscherServer.anfragen]))
-        with open(stand, "w") as f:
+        self.assertTrue(bis(lambda: stand(tok)["schritt"] == "verknuepft"))
+        with open(datei, "w") as f:
             f.write("fertig")
-        ende = time.time() + 20
-        while time.time() < ende and self.a._wa_faden.is_alive():
-            time.sleep(0.5)
-        texte = self.gesendet()
-        self.assertTrue(any("eingerichtet" in t for t in texte), texte)
+        self.assertTrue(bis(lambda: not self.a._wa_faden.is_alive(), 20))
+        self.assertTrue(any("eingerichtet" in x for x in self.gesendet()))
         self.assertEqual(self.a.wa_status(), "an")
+        self.assertEqual(stand(tok)["schritt"], "fertig")
         self.assertTrue(os.path.exists(os.path.join(self.home, "jobs", "whatsapp-nacht.md")))
         self.assertIsNone(self.a.load().get("whatsapp"))
+        self.assertFalse(self.a.wa_anbieten())   # verbunden: kein Angebot mehr
+
+    def test_fehler_auf_dem_server(self):
+        web = freier_port()
+        self.inst.weg()
+        self.inst = Instanz(google=False, port=self.port, web_port=web)
+        t = self.inst.tmp.name
+        os.makedirs(f"{t}/wa")
+        with open(f"{t}/unit.path", "w") as f:
+            f.write("")
+        self.inst.env.update({"ASSISTENT_WA_DIR": f"{t}/wa", "ASSISTENT_WA_API": f"http://127.0.0.1:{self.wa_port}/api",
+                              "ASSISTENT_WA_UNIT": f"{t}/unit.path", "ASSISTENT_WA_TAKT": "0.2"})
+        os.environ.update(self.inst.env)
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.a.ADMIN = ""
+        FalscherServer.anfragen.clear()
+        self.assertEqual(self.a.wa_seite_start(), "")
+        os.remove(self.a.WA_AUFTRAG)
+        with open(f"{t}/wa/stand", "w") as f:
+            f.write("fehler: Der Server hat zu wenig Speicher.")
+        ende = time.time() + 15
+        while time.time() < ende and self.a._wa_faden.is_alive():
+            time.sleep(0.1)
+        self.assertIn(("Der Server hat zu wenig Speicher.", "Noch einmal versuchen"),
+                      [(k[0], k[1]) for k in self.knoepfe()])
+        self.assertEqual(self.a.wa_seitenstand(), {"schritt": "fehler", "fehler": "Der Server hat zu wenig Speicher."})
+        time.sleep(1.2)                   # der alte Stand ist älter als der neue Auftrag
+        self.nachricht("/whatsapp_neu")   # eingewilligt: startet direkt neu, der alte Fehler ist weg
+        self.assertEqual(self.a.wa_seitenstand()["schritt"], "baut")
+        self.nachricht("Nein danke")      # ohne offenes Angebot geht das an die KI, nicht an WhatsApp
+        self.assertFalse((self.a.load().get("wa_angebot") or {}).get("nein"))
 
 
 def _png(ordner):
