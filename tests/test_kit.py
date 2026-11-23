@@ -646,7 +646,7 @@ class Anmeldeseite(Chat, unittest.TestCase):
     def test_google_anleitung_ohne_localhost(self):
         self.nachricht("/google")
         k = self.knoepfe()
-        self.assertTrue(any(knopf == "Kalender und Mail" and "/einrichten?t=" in u and u.endswith("#google")
+        self.assertTrue(any(knopf == "Kalender und Mail" and "/einrichten?t=" in u and u.endswith("&wo=google")
                             for _, knopf, u in k), k)
 
     def test_code_aus(self):

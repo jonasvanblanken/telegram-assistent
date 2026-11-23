@@ -417,7 +417,7 @@ async function abschluss(){
   if(!S.eingerichtet){const r=await post('einrichten/fertig',{});
     if(r.ok===false){offen='ki';zeichne();return fehler('code-fehler',r.fehler)}}
   fertig('Fertig',(S.assistent||'Dein Assistent')+' schreibt dir jetzt in Telegram.')}
-function fertig(titel,text){clearInterval(zeit);clearInterval(googleZeit);document.querySelectorAll('.aendern').forEach(b=>b.hidden=true);$('fertig-titel').textContent=titel;
+function fertig(titel,text){clearInterval(zeit);clearInterval(googleZeit);zeit=null;offen='';zeichne();$('fertig-titel').textContent=titel;
   $('fertig-text').textContent=text;$('fertig').hidden=false;
   for(const k of STUFEN)$('s-'+k).classList.remove('offen');$('fertig').scrollIntoView({behavior:'smooth',block:'center'})}
 function oeffnen(k){bearbeitet=true;offen=k;$('fertig').hidden=true;zeichne();if(k==='ki')zuruecksetzen()}
@@ -471,7 +471,7 @@ $('google-aus').onclick=async()=>{await post('einrichten/google-aus',{});S.googl
   if(!S){$('abgelaufen').hidden=false;for(const k of STUFEN)$('s-'+k).hidden=true;return}
   $('person').value=S.person||'';$('assistent').value=S.assistent||'';$('konto').value=S.google.konto||'';
   if(S.google.dienste.length)document.querySelectorAll('[data-dienst]').forEach(x=>x.checked=S.google.dienste.includes(x.dataset.dienst));
-  const sprung=location.hash.slice(1);
+  const sprung=new URLSearchParams(location.search).get('wo')||location.hash.slice(1);
   if(STUFEN.includes(sprung)&&S.eingerichtet){oeffnen(sprung);return}
   weiter()})();
 </script>""".replace("__BOT__", json.dumps(bot or ""))

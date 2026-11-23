@@ -213,7 +213,7 @@ def einrichten_hinweis(immer=False, wo=""):
     update(anmelde_hinweis=time.time())
     if not WEB:
         return sende_text(f"Ich bin noch mit keiner KI verbunden. {ADMIN} richtet das ein, danach antworte ich dir.")
-    url = anmeldelink(neu=True) + (f"#{wo}" if wo else "")
+    url = anmeldelink(neu=True) + (f"&wo={wo}" if wo else "")   # kein #: Telegram belegt den Hash der Web App
     if not eingerichtet():
         text = ("Tipp auf Einrichten, das dauert drei Minuten. Du brauchst nur dein Abo bei Claude oder ChatGPT."
                 + (" Deine Nachrichten beantworte ich, sobald ich eingerichtet bin." if not immer else ""))
