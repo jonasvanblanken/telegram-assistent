@@ -796,6 +796,7 @@ class Einladung(Chat, unittest.TestCase):
         r = self.senden("/einrichten/fragebogen", {"t": t, "antworten": {
             "wohnort": "Köln", "menschen": "Partner Tim,  Tochter Mia", "hilfe": ["Termine", "Unsinn"], "ton": "Locker"}})
         self.assertTrue(r.get("ok"), r)
+        self.assertTrue(any("Antworten bekommen" in x for x in self.gesendet(warten=1)))
         stand = json.loads(self.holen(f"/einrichten/stand?t={t}")[1])["fragebogen"]
         self.assertTrue(stand["erledigt"])
         self.assertEqual(stand["antworten"]["hilfe"], ["Termine"])
@@ -806,6 +807,15 @@ class Einladung(Chat, unittest.TestCase):
         FalscherServer.anfragen.clear()
         self.assertEqual(self.a.abschliessen(), "")
         self.assertFalse(any("Fertig, Mara" in x for x in self.gesendet(warten=1)))   # die KI meldet sich selbst
+
+    def test_antwort_mit_knoepfen(self):
+        self.binden()
+        FalscherServer.anfragen.clear()
+        self.a.antworte("Morgen früh kann ich dir deine Termine zeigen.\n\n- Soll ich?\n[knopf: Ja, gern]\n[knopf: Nein]")
+        self.gesendet(warten=1)
+        n = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"][-1]
+        self.assertNotIn("knopf", n["text"])
+        self.assertEqual(json.loads(n["reply_markup"])["keyboard"], [[{"text": "Ja, gern"}], [{"text": "Nein"}]])
 
     def test_fragebogen_wird_angeboten(self):
         self.binden()

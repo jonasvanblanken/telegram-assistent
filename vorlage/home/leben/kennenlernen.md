@@ -19,3 +19,7 @@ Der Lauf `jobs/vorstellen.md` stellt {{PERSON}} je Nachricht eine Funktion vor u
 <!-- /google -->
 - Nachschauen im Netz: Öffnungszeiten, Notdienste, Preise vergleichen, „Welche Apotheke hat heute Notdienst?“
 - Eigene Zeiten: Morgen- und Abendnachricht verschieben oder abstellen, „Schreib mir morgens erst um 8“
+
+## Gebeten
+
+Worum du {{PERSON}} gebeten hast, damit du etwas besser kannst, mit Datum und Antwort.

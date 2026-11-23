@@ -445,7 +445,7 @@ def fragebogen_speichern(antworten):
               "dem, was fehlt oder neugierig macht. "
               + ("" if erneut else f"Oben in die Datei kommt die Zeile `Kennenlernwoche bis: {bis}`. ")
               + "Feste Wochentermine legst du nicht ohne Nachfrage als Zeitpläne an.\n\n"
-              + (f"Dann bestätigst du {PERSON} in einem Satz, dass du es übernommen hast."
+              + ("Die Bestätigung hat der Bot schon geschickt, antworte danach nur `STILL`."
                  if erneut else
                  f"Dann schreibst du {PERSON} deine erste Nachricht: zwei bis vier Sätze, die zeigen, dass du zugehört "
                  "hast (ein, zwei Dinge aus den Antworten aufgreifen, nicht alles aufzählen). Sag beiläufig, dass "
@@ -453,6 +453,12 @@ def fragebogen_speichern(antworten):
                  "Nachfrage. Kein Fragebogen-Ton, keine Zusammenfassung, keine Liste."))
     einreihen("job", ["kennenlernen", {"prompt": prompt, "gespraech": "chat", "modell": "standard",
                                          "effort": "medium", "melden": "antwort"}])
+    try:   # sofort ein Zeichen in Telegram, die Nachricht der KI braucht ein, zwei Minuten
+        sende_text("Danke, deine Änderungen habe ich übernommen." if erneut else
+                   "Danke dir, ich habe deine Antworten bekommen und sortiere sie gerade ein. "
+                   "In ein, zwei Minuten melde ich mich.")
+    except Exception as e:
+        log(f"Bestätigung Fragebogen nicht gesendet: {type(e).__name__}: {e}")
     notiere("System", f"Fragebogen {'geändert' if erneut else 'ausgefüllt'}")
     log(f"Fragebogen {'geändert' if erneut else 'ausgefüllt'}: {', '.join(a)}")
     return ""
@@ -718,16 +724,23 @@ def stuecke(text, laenge=3500):
     return out + ([rest] if rest else [])
 
 
-def sende_text(text, chat=None):
+def sende_text(text, chat=None, knoepfe=None):
+    """knoepfe: Antworten zum Antippen (Telegram-Tastatur unter dem Chat), hängen an der letzten Nachricht.
+    Ein Tipp schickt den Text des Knopfs als normale Nachricht der Person."""
     chat = chat or PERSON_ID
-    for teil in stuecke(text):
+    teile = stuecke(text)
+    for i, teil in enumerate(teile):
+        extra = {}
+        if knoepfe and i == len(teile) - 1:
+            extra["reply_markup"] = {"keyboard": [[{"text": k}] for k in knoepfe],
+                                     "resize_keyboard": True, "one_time_keyboard": True}
         try:
             telegram("sendMessage", {"chat_id": chat, "text": html(teil), "parse_mode": "HTML",
-                                     "disable_web_page_preview": "true"})
+                                     "disable_web_page_preview": "true", **extra})
         except TelegramFehler as e:
             if e.code != 400:
                 raise
-            telegram("sendMessage", {"chat_id": chat, "text": teil, "disable_web_page_preview": "true"})
+            telegram("sendMessage", {"chat_id": chat, "text": teil, "disable_web_page_preview": "true", **extra})
 
 
 def sende_datei(pfad, chat=None):
@@ -756,10 +769,23 @@ def dateien_aus(text):
     return "\n".join(zeilen).strip(), pfade
 
 
+def knoepfe_aus(text):
+    """Zeilen `[knopf: <antwort>]` aus der Antwort ziehen, höchstens vier. Rückgabe: Text ohne diese Zeilen, Knöpfe."""
+    knoepfe, zeilen = [], []
+    for z in text.splitlines():
+        m = re.fullmatch(r"\s*\[knopf:\s*(.+?)\]\s*", z)
+        if m and len(knoepfe) < 4:
+            knoepfe.append(m.group(1).strip().strip("`")[:60])
+        elif not m:
+            zeilen.append(z)
+    return "\n".join(zeilen).strip(), knoepfe
+
+
 def antworte(text):
     text, pfade = dateien_aus(text)
+    text, knoepfe = knoepfe_aus(text)
     if text:
-        sende_text(text)
+        sende_text(text, knoepfe=knoepfe)
     for p in pfade:
         try:
             sende_datei(p)
