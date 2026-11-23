@@ -41,4 +41,28 @@ if [ "$(version @openai/codex)" != "$CODEX" ] || [ "$(version @google/gemini-cli
 fi
 chown -R root:root "$ZIEL"
 chmod -R go-w "$ZIEL"
+
+# Ubuntu ab 24.04 sperrt User-Namespaces für normale Programme. Die Sandbox von Codex (bubblewrap) braucht sie,
+# sonst scheitert jeder Befehl unter ChatGPT („bwrap: setting up uid map: Permission denied“) und der Assistent
+# kann keine Datei lesen. Das Profil erlaubt Namespaces nur genau diesem Programm, die Sandbox selbst bleibt an.
+CODEX_BIN=$(find "$ZIEL/lib/node_modules/@openai" -type f -path "*/vendor/*/bin/codex" 2>/dev/null | head -1)
+if [ -n "$CODEX_BIN" ] && [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ] \
+   && command -v apparmor_parser >/dev/null; then
+  PROFIL=/etc/apparmor.d/pearl-kit-codex
+  INHALT="abi <abi/4.0>,
+include <tunables/global>
+
+profile pearl-kit-codex \"$CODEX_BIN\" flags=(unconfined) {
+  userns,
+  include if exists <local/pearl-kit-codex>
+}"
+  if [ "$(cat "$PROFIL" 2>/dev/null)" != "$INHALT" ] || ! grep -q "^pearl-kit-codex " /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    printf '%s\n' "$INHALT" > "$PROFIL"
+    if apparmor_parser -r "$PROFIL"; then
+      echo "   AppArmor: Sandbox von Codex darf Namespaces anlegen"
+    else
+      echo "   AppArmor-Profil für Codex ließ sich nicht laden, ChatGPT kann dann keine Dateien lesen" >&2
+    fi
+  fi
+fi
 echo "   codex $("$ZIEL/bin/codex" --version 2>/dev/null | tail -1), gemini $("$ZIEL/bin/gemini" --version 2>/dev/null | tail -1)"
