@@ -1,0 +1,10 @@
+[Unit]
+Description=Stündlich nach einer neuen Fassung des Assistenten-Kits sehen
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
