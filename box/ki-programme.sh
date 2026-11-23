@@ -44,10 +44,26 @@ chmod -R go-w "$ZIEL"
 
 # Ubuntu ab 24.04 sperrt User-Namespaces für normale Programme. Die Sandbox von Codex (bubblewrap) braucht sie,
 # sonst scheitert jeder Befehl unter ChatGPT („bwrap: setting up uid map: Permission denied“) und der Assistent
-# kann keine Datei lesen. Das Profil erlaubt Namespaces nur genau diesem Programm, die Sandbox selbst bleibt an.
+# kann keine Datei lesen. Weg nach der Codex-Doku (developers.openai.com/codex/concepts/sandboxing): bubblewrap aus
+# dem System (Codex nimmt das erste bwrap im PATH) und Ubuntus Profil bwrap-userns-restrict laden. Die Sperre für
+# alle anderen Programme bleibt an. Dazu ein Profil nur für das Codex-Programm, falls es doch sein eigenes bwrap nimmt.
+SPERRE=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)
+if [ "$SPERRE" = 1 ] && command -v apt-get >/dev/null; then
+  if ! command -v bwrap >/dev/null \
+     || { [ ! -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ] && [ ! -f /etc/apparmor.d/bwrap-userns-restrict ]; }; then
+    echo "   bubblewrap und AppArmor-Profile für die Sandbox von Codex"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 bubblewrap apparmor-profiles apparmor-utils >/dev/null \
+      || echo "   bubblewrap ließ sich nicht installieren" >&2
+  fi
+  if [ ! -f /etc/apparmor.d/bwrap-userns-restrict ] && [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
+    install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+  fi
+  if [ -f /etc/apparmor.d/bwrap-userns-restrict ] && command -v apparmor_parser >/dev/null; then
+    apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict || echo "   Profil bwrap-userns-restrict ließ sich nicht laden" >&2
+  fi
+fi
 CODEX_BIN=$(find "$ZIEL/lib/node_modules/@openai" -type f -path "*/vendor/*/bin/codex" 2>/dev/null | head -1)
-if [ -n "$CODEX_BIN" ] && [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ] \
-   && command -v apparmor_parser >/dev/null; then
+if [ -n "$CODEX_BIN" ] && [ "$SPERRE" = 1 ] && command -v apparmor_parser >/dev/null; then
   PROFIL=/etc/apparmor.d/pearl-kit-codex
   INHALT="abi <abi/4.0>,
 include <tunables/global>
@@ -64,5 +80,16 @@ profile pearl-kit-codex \"$CODEX_BIN\" flags=(unconfined) {
       echo "   AppArmor-Profil für Codex ließ sich nicht laden, ChatGPT kann dann keine Dateien lesen" >&2
     fi
   fi
+fi
+# Probe als normaler Nutzer: kommt die Sandbox hoch, kann ChatGPT Dateien lesen
+if [ -x "$ZIEL/bin/codex" ] && id nobody >/dev/null 2>&1; then
+  PROBE=$(mktemp -d); chown nobody "$PROBE"
+  if (cd "$PROBE" && runuser -u nobody -- env HOME="$PROBE" CODEX_HOME="$PROBE" PATH="$ZIEL/bin:/usr/bin:/bin" \
+        "$ZIEL/bin/codex" sandbox -- /bin/true) >/dev/null 2>&1; then
+    echo "   Sandbox von Codex: läuft"
+  else
+    echo "   Sandbox von Codex kommt nicht hoch, ChatGPT kann so keine Dateien lesen" >&2
+  fi
+  rm -rf "$PROBE"
 fi
 echo "   codex $("$ZIEL/bin/codex" --version 2>/dev/null | tail -1), gemini $("$ZIEL/bin/gemini" --version 2>/dev/null | tail -1)"
