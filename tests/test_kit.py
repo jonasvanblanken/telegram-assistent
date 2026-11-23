@@ -782,6 +782,8 @@ class Einladung(Chat, unittest.TestCase):
         self.assertEqual(code, 200)
         for teil in ("s-namen", "s-ki", "s-google", "telegram-web-app.js", "Ohne Google weiter", '"test_bot"'):
             self.assertIn(teil, seite)
+        self.assertIn('data-anbieter="claude"', seite)
+        self.assertNotIn('data-anbieter="gemini"', seite)   # Gemini CLI nimmt seit 18.06.2026 keine privaten Konten
 
 
 class EigenerServer(unittest.TestCase):

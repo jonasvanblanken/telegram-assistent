@@ -21,6 +21,9 @@ ANBIETER = {
                "modell": "standard", "klein": "flash", "effort": ""},
 }
 REIHE = ("claude", "chatgpt", "gemini")
+# Auf der Einrichtungsseite: Google hat die Gemini CLI für private Konten am 18.06.2026 abgeschaltet
+# (Nachfolger Antigravity CLI). Gemini bleibt im Code für bestehende Assistenten, neue wählen nur noch diese.
+ANGEBOTEN = ("claude", "chatgpt")
 KI_BIN = os.environ.get("ASSISTENT_KI_BIN") or "/opt/pearl-kit-ki/bin"   # codex und gemini, fest installiert
 CODEX_HOME = os.path.join(kit.DATEN, "codex")
 GEMINI_HOME = os.path.join(kit.DATEN, "gemini")      # GEMINI_CLI_HOME, darin .gemini/

@@ -215,7 +215,7 @@ def einrichten_hinweis(immer=False, wo=""):
         return sende_text(f"Ich bin noch mit keiner KI verbunden. {ADMIN} richtet das ein, danach antworte ich dir.")
     url = anmeldelink(neu=True) + (f"#{wo}" if wo else "")
     if not eingerichtet():
-        text = ("Tipp auf Einrichten, das dauert drei Minuten. Du brauchst nur dein Abo bei Claude, ChatGPT oder Gemini."
+        text = ("Tipp auf Einrichten, das dauert drei Minuten. Du brauchst nur dein Abo bei Claude oder ChatGPT."
                 + (" Deine Nachrichten beantworte ich, sobald ich eingerichtet bin." if not immer else ""))
         return sende_knopf(text, "Einrichten", url)
     if wo == "google":

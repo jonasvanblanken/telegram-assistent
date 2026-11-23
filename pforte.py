@@ -2,7 +2,7 @@
 unter [web] adresse (https://<box-domain>/<kurzname>, Caddy schneidet /<kurzname> ab). Der Bot öffnet sie als
 Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browser auf.
 
-  GET  /einrichten?t=<link>        Namen, KI (Claude, ChatGPT oder Gemini), Kalender und Mail. /anmelden ist dasselbe
+  GET  /einrichten?t=<link>        Namen, KI (Claude oder ChatGPT), Kalender und Mail. /anmelden ist dasselbe
   GET  /einrichten/stand?t=<link>  Stand als JSON, mit dem laufenden Login
   POST /einrichten/namen           {t, person, assistent}
   POST /anmelden/start             {t, anbieter}  startet das Login-Programm des Anbieters
@@ -330,7 +330,7 @@ def einrichtungsseite(name, bot):
     wahl = "".join(
         f'<button class="zeile" data-anbieter="{k}"><span class="kachel">{ICON["funke"]}</span>'
         f'<span><b>{e(v["name"])}</b><small>{e(v["abo"])}</small></span></button>'
-        for k, v in ((k, anbieter.ANBIETER[k]) for k in anbieter.REIHE))
+        for k, v in ((k, anbieter.ANBIETER[k]) for k in anbieter.ANGEBOTEN))
     schalter = "".join(
         f'<label class="schalter"><span class="kachel">{ICON[icon]}</span><span><b>{titel}</b><small>{was}</small></span>'
         f'<input type="checkbox" data-dienst="{k}" checked><i aria-hidden="true"></i></label>'
