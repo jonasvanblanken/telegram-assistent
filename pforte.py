@@ -12,6 +12,7 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /einrichten/google-aus      {t}            ohne Google weiter
   POST /einrichten/fragebogen      {t, antworten} Kennenlern-Fragebogen speichern, die KI meldet sich danach
   POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
+  POST /einrichten/whatsapp        {t, an}        WhatsApp dazu (der Server baut sofort) oder ohne
   POST /einrichten/fertig          {t}            home/ anlegen, der Assistent stellt sich im Chat vor
   GET  /oauth2callback?...         Rückweg von Google, geht an den Google-Dienst der Instanz
   GET  /whatsapp?t=<wa-link>       WhatsApp verbinden (eigener Link, gilt sieben Tage)
@@ -319,6 +320,9 @@ ICON = {
             '<path d="m3 7 9 6 9-6"/></svg>',
     "sprechblase": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
                    'stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
+    "handy": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+             'stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/>'
+             '<path d="M10.5 18.5h3"/></svg>',
     "kreuz": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" '
              'stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>',
 }
@@ -353,7 +357,7 @@ def einrichtungsseite(name, bot):
         for k, icon, titel, was in (("kalender", "kalender", "Kalender", "Termine und Aufgaben"),
                                     ("mail", "mail", "Mail", "Lesen, Entwürfe, Drive")))
     inhalt = f"""
-<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span><span data-zu="profil">Über dich</span></nav>
+<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span><span data-zu="whatsapp">WhatsApp</span><span data-zu="profil">Über dich</span></nav>
 <p class="karte" id="abgelaufen" hidden>Dieser Link ist abgelaufen. Schick deinem Bot /start, dann bekommst du einen neuen.</p>
 <section class="karte stufe" id="s-namen">{kopf("namen", "person", "Namen")}
   <div class="inhalt">
@@ -400,6 +404,18 @@ def einrichtungsseite(name, bot):
     <button class="knopf ohne" id="google-aus">Ohne Google weiter</button>
   </div>
 </section>
+<section class="karte stufe" id="s-whatsapp">{kopf("whatsapp", "handy", "WhatsApp")}
+  <div class="inhalt">
+    <p>Auf Wunsch liest <span class="an">dein Assistent</span> nachts deine Einzelchats mit und sagt dir morgens, wem
+    du noch antworten wolltest und was bei den Menschen los ist, die dir wichtig sind. Gruppen bleiben außen vor,
+    geschrieben wird weiter nur in Telegram.</p>
+    <p>Die Verbindung läuft über ein inoffizielles Programm, das sich wie WhatsApp Web anmeldet. WhatsApp kann so eine
+    Verknüpfung im schlimmsten Fall sperren. Deine Nachrichten bleiben verschlüsselt auf deinem Server.</p>
+    <p class="fehler" id="whatsapp-fehler" hidden></p>
+    <button class="knopf" id="whatsapp-ja">Ja, WhatsApp dazu</button>
+    <button class="knopf ohne" id="whatsapp-ohne">Ohne WhatsApp weiter</button>
+  </div>
+</section>
 <section class="karte stufe" id="s-profil">{kopf("profil", "sprechblase", "Über dich")}
   <div class="inhalt">
     <p>Damit <span class="an">dein Assistent</span> dich von Anfang an kennt.</p>
@@ -422,7 +438,7 @@ def einrichtungsseite(name, bot):
 const BOT=__BOT__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
 const t=new URLSearchParams(location.search).get('t'),$=id=>document.getElementById(id);
-const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
+const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','whatsapp','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
 let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false;
 async function stand(){try{const r=await fetch('einrichten/stand?t='+encodeURIComponent(t));return r.ok?r.json():null}catch(e){return null}}
 async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:{'content-type':'application/json'},
@@ -430,13 +446,18 @@ async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:
 function oeffne(url){if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}
 function fehler(id,text){$(id).textContent=text||'';$(id).hidden=!text}
 function erledigt(){return{namen:!!(S.person&&S.assistent),ki:!!S.anbieter,
-  google:!S.google.moeglich||S.google.verbunden||S.google.uebersprungen,profil:!!(S.fragebogen&&S.fragebogen.erledigt)}}
+  google:!S.google.moeglich||S.google.verbunden||S.google.uebersprungen,
+  whatsapp:!S.whatsapp||!S.whatsapp.moeglich||!!S.whatsapp.wahl||S.whatsapp.an||S.eingerichtet,
+  profil:!!(S.fragebogen&&S.fragebogen.erledigt)}}
 function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
-  const e=erledigt();$('s-google').hidden=!S.google.moeglich;
+  const e=erledigt(),wa=!!(S.whatsapp&&S.whatsapp.moeglich);$('s-google').hidden=!S.google.moeglich;
   document.querySelector('[data-zu=google]').hidden=!S.google.moeglich;
+  $('s-whatsapp').hidden=document.querySelector('[data-zu=whatsapp]').hidden=!wa;
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
     google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
+    whatsapp:S.whatsapp&&(S.whatsapp.an?'Verbunden':S.whatsapp.wahl==='ja'?'Wird eingerichtet, der QR-Code kommt im Chat':
+      S.whatsapp.wahl==='ohne'?'Ohne WhatsApp':'Später im Chat mit /whatsapp')||'',
     profil:S.fragebogen&&Object.keys(S.fragebogen.antworten||{}).length?'Beantwortet':'Übersprungen'};
   document.querySelectorAll('.an').forEach(x=>x.textContent=S.assistent||'dein Assistent');
   for(const k of STUFEN){const el=$('s-'+k),fertig=e[k]&&k!==offen;
@@ -512,6 +533,12 @@ function chips(id,werte,mehrere,gewaehlt){const box=$(id);box.innerHTML='';for(c
   c.onclick=()=>{if(!mehrere)box.querySelectorAll('.chip').forEach(x=>{if(x!==c)x.setAttribute('aria-pressed','false')});
     c.setAttribute('aria-pressed',String(c.getAttribute('aria-pressed')!=='true'))};box.appendChild(c)}}
 const gewaehlt=id=>[...$(id).querySelectorAll('.chip[aria-pressed=true]')].map(x=>x.textContent);
+async function whatsappWahl(an){const b=$(an?'whatsapp-ja':'whatsapp-ohne');b.disabled=true;
+  const r=await post('einrichten/whatsapp',{an});b.disabled=false;
+  if(r.ok===false)return fehler('whatsapp-fehler',r.fehler);fehler('whatsapp-fehler','');
+  S.whatsapp=Object.assign(S.whatsapp||{},{wahl:an?'ja':'ohne'});weiter()}
+$('whatsapp-ja').onclick=()=>whatsappWahl(true);
+$('whatsapp-ohne').onclick=()=>whatsappWahl(false);
 function fragebogenFuellen(){const f=S.fragebogen||{antworten:{},hilfe:[],ton:[]},a=f.antworten||{};
   for(const k of FELDER)$('f-'+k).value=a[k]||'';
   chips('f-hilfe',f.hilfe||[],true,a.hilfe||[]);chips('f-ton',f.ton||[],false,a.ton?[a.ton]:[])}
@@ -743,6 +770,9 @@ def handler_fuer(pforte):
             if self.path == "/einrichten/google-aus":
                 h["google_aus"]()
                 return self.senden(200, {"ok": True})
+            if self.path == "/einrichten/whatsapp" and "wa_onboarding" in h:
+                f = h["wa_onboarding"](d.get("an") is True)
+                return self.senden(200, {"ok": not f, "fehler": f})
             if self.path == "/einrichten/fertig":
                 f = h["abschliessen"]()
                 return self.senden(200, {"ok": not f, "fehler": f})

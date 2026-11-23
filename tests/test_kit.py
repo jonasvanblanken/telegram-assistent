@@ -1244,6 +1244,56 @@ class WhatsApp(Chat, unittest.TestCase):
         self.assertIsNone(self.a.load().get("whatsapp"))
         self.assertFalse(self.a.wa_anbieten())   # verbunden: kein Angebot mehr
 
+    def test_haekchen_im_onboarding(self):
+        web = freier_port()
+        self.inst.weg()
+        self.inst = Instanz(google=False, port=self.port, web_port=web)
+        t = self.inst.tmp.name
+        os.makedirs(f"{t}/wa")
+        with open(f"{t}/unit.path", "w") as f:
+            f.write("")
+        self.inst.env.update({"ASSISTENT_WA_DIR": f"{t}/wa", "ASSISTENT_WA_API": f"http://127.0.0.1:{self.wa_port}/api",
+                              "ASSISTENT_WA_UNIT": f"{t}/unit.path", "ASSISTENT_WA_TAKT": "0.2"})
+        os.environ.update(self.inst.env)
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.a.ADMIN = ""
+        pf_srv, _ = self.a.pforte_starten()
+        self.addCleanup(pf_srv.shutdown)
+        claude_md = os.path.join(self.inst.env["ASSISTENT_DIR"], "home", "CLAUDE.md")
+        os.rename(claude_md, claude_md + ".weg")   # mitten in der Einrichtung
+        tok = self.a.anmeldelink().split("t=", 1)[1]
+
+        def post(pfad, daten):
+            req = urllib.request.Request(f"http://127.0.0.1:{web}{pfad}", data=json.dumps({"t": tok, **daten}).encode(),
+                                         headers={"content-type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{web}/einrichten/stand?t={tok}", timeout=10) as r:
+            self.assertEqual(json.loads(r.read())["whatsapp"], {"moeglich": True, "wahl": "", "an": False})
+        with urllib.request.urlopen(f"http://127.0.0.1:{web}/einrichten?t={tok}", timeout=10) as r:
+            self.assertIn("Ja, WhatsApp dazu", r.read().decode())
+        FalscherServer.anfragen.clear()
+        self.assertTrue(post("/einrichten/whatsapp", {"an": True})["ok"])
+        self.assertEqual(open(self.a.WA_AUFTRAG).read().strip(), "an")   # der Server baut sofort
+        os.remove(self.a.WA_AUFTRAG)
+        self.assertEqual(self.a.load()["wa_onboarding"], "ja")
+        with open(f"{t}/wa/stand", "w") as f:
+            f.write("bereit")
+        time.sleep(1.5)
+        self.assertEqual(self.knoepfe(0), [])   # kein QR-Code, solange die Einrichtung läuft
+        os.rename(claude_md + ".weg", claude_md)
+        ende = time.time() + 15
+        while time.time() < ende and not any(k[1] == "QR-Code zeigen" for k in self.knoepfe(0)):
+            time.sleep(0.2)
+        self.assertTrue(any(k[1] == "QR-Code zeigen" for k in self.knoepfe(0)))
+        self.assertFalse(self.a.wa_anbieten())   # eingewilligt: kein Angebot mehr
+        with open(f"{t}/wa/stand", "w") as f:
+            f.write("fehler: weg")   # Faden beenden
+        ende = time.time() + 15
+        while time.time() < ende and self.a._wa_faden.is_alive():
+            time.sleep(0.1)
+
     def test_fehler_auf_dem_server(self):
         web = freier_port()
         self.inst.weg()

@@ -523,7 +523,8 @@ def einrichtung_stand():
                            "hilfe": list(HILFE_WAHL), "ton": list(TON_WAHL)},
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
-                       "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))}}
+                       "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))},
+            "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"}}
 
 
 def google_web(query):
@@ -559,7 +560,8 @@ def pforte_starten():
             "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen,
             "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
             "fragebogen_aus": fragebogen_ueberspringen, **({"wa_link_gueltig": wa_link_gueltig,
-            "wa_stand": wa_seitenstand, "wa_start": wa_seite_start} if wa_moeglich() else {})})
+            "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding}
+                                                           if wa_moeglich() else {})})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
         return srv
     except OSError as e:
@@ -1779,7 +1781,7 @@ def sende_ohne_tastatur(text):
         sende_text(text)
 
 
-def wa_seite_start():
+def wa_seite_start(im_chat=True):
     """Einwilligung auf der Seite: der Server richtet die Bridge ein. Rückgabe: Fehlertext oder ''."""
     if not wa_moeglich():
         return "WhatsApp gibt es nur auf einem eigenen Server."
@@ -1789,9 +1791,22 @@ def wa_seite_start():
     update(whatsapp_ja=load().get("whatsapp_ja") or time.time(), whatsapp=None, wa_fehler=None,
            wa_angebot={**a, "offen": False, "ja": time.time()})
     wa_starten("an")
-    sende_ohne_tastatur("Ich richte WhatsApp jetzt auf deinem Server ein. Beim ersten Mal dauert das zehn bis "
-                        "fünfzehn Minuten, dann melde ich mich mit dem QR-Code.")
+    if im_chat:
+        sende_ohne_tastatur("Ich richte WhatsApp jetzt auf deinem Server ein. Beim ersten Mal dauert das zehn bis "
+                            "fünfzehn Minuten, dann melde ich mich mit dem QR-Code.")
     return ""
+
+
+def wa_onboarding(an):
+    """Schritt WhatsApp der Einrichtungsseite. Ja: der Server baut sofort, der QR-Code kommt nach der Einrichtung
+    im Chat. Ohne: später fragt der Assistent einmal von selbst (wa_anbieten). Rückgabe: Fehlertext oder ''."""
+    if not an:
+        update(wa_onboarding="ohne")
+        return ""
+    f = wa_seite_start(im_chat=False)
+    if not f:
+        update(wa_onboarding="ja")
+    return f
 
 
 def wa_anbieten(immer=False):
@@ -1880,6 +1895,8 @@ def wa_begleiten(was, seit):
             gemeldet.add("baut")
             sende_text("Der Server baut noch, das dauert beim ersten Mal etwas. Ich melde mich mit dem QR-Code.")
         elif stand == "bereit":
+            if not eingerichtet():   # aus dem Onboarding: der Code kommt, wenn die Seite durch ist
+                continue
             if not qr_seit:
                 qr_seit = time.time()
                 sende_knopf("Der QR-Code ist da. Öffne ihn am besten am Laptop, scannen musst du mit dem Handy.",
@@ -1890,6 +1907,8 @@ def wa_begleiten(was, seit):
             gemeldet.add("verknuepft")
             sende_text("Verbunden. Jetzt kommen deine Kontakte an, das dauert zwei, drei Minuten.")
         elif stand == "fertig":
+            if not eingerichtet():
+                continue
             code, aus = wa_werkzeug("einrichten")
             log(f"WhatsApp einrichten: Exit {code}: {aus[:200]}")
             if code:
