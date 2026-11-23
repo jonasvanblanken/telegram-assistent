@@ -788,6 +788,69 @@ class Einladung(Chat, unittest.TestCase):
         self.nachricht("/ki_chatgpt", von=777)
         self.assertTrue(glob.glob(os.path.join(self.a.SCHLANGE, "*-ki.json")))
 
+    def test_fragebogen(self):
+        t = self.binden()
+        self.senden("/einrichten/namen", {"t": t, "person": "Mara", "assistent": "Lotte"})
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.senden("/einrichten/fragebogen", {"t": t, "antworten": {"wohnort": "  "}}).get("ok"), False)
+        r = self.senden("/einrichten/fragebogen", {"t": t, "antworten": {
+            "wohnort": "Köln", "menschen": "Partner Tim,  Tochter Mia", "hilfe": ["Termine", "Unsinn"], "ton": "Locker"}})
+        self.assertTrue(r.get("ok"), r)
+        stand = json.loads(self.holen(f"/einrichten/stand?t={t}")[1])["fragebogen"]
+        self.assertTrue(stand["erledigt"])
+        self.assertEqual(stand["antworten"]["hilfe"], ["Termine"])
+        auftrag = json.load(open(glob.glob(os.path.join(self.a.SCHLANGE, "*-job.json"))[0]))["inhalt"]
+        self.assertEqual(auftrag[0], "kennenlernen")
+        self.assertIn("Partner Tim, Tochter Mia", auftrag[1]["prompt"])
+        self.assertIn("Kennenlernwoche bis", auftrag[1]["prompt"])
+        FalscherServer.anfragen.clear()
+        self.assertEqual(self.a.abschliessen(), "")
+        self.assertFalse(any("Fertig, Mara" in x for x in self.gesendet(warten=1)))   # die KI meldet sich selbst
+
+    def test_fragebogen_wird_angeboten(self):
+        self.binden()
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.a.abschliessen()
+        FalscherServer.anfragen.clear()
+        self.a.fragebogen_anbieten()
+        k = self.knoepfe()
+        self.assertTrue(k and k[-1][1] == "Fragen beantworten" and k[-1][2].endswith("&wo=profil"), k)
+        FalscherServer.anfragen.clear()
+        self.a.fragebogen_anbieten()   # nur einmal
+        self.assertEqual(self.gesendet(warten=0.5), [])
+
+    def test_vorlage_nachziehen(self):
+        self.binden()
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.a.abschliessen()
+        e = self.a.einrichten
+        home = self.a.HOME_DIR
+        person, claude = os.path.join(home, "profil", "person.md"), os.path.join(home, "CLAUDE.md")
+        open(person, "a", encoding="utf-8").write("- wohnt in Köln\n")
+        st = e.stand_lesen()   # so tun, als hätte sich die Vorlage seitdem geändert
+        for rel in ("CLAUDE.md", os.path.join("profil", "person.md"), os.path.join("jobs", "morgen.md")):
+            st[rel]["vorlage"] = "alt"
+        e.schreibe(e.STAND, json.dumps(st))
+        open(os.path.join(home, "jobs", "morgen.md"), "w").write("alter Morgen-Check, unverändert seit dem Anlegen")
+        st = e.stand_lesen()
+        st[os.path.join("jobs", "morgen.md")]["datei"] = e._hash("alter Morgen-Check, unverändert seit dem Anlegen")
+        e.schreibe(e.STAND, json.dumps(st))
+        os.remove(os.path.join(home, "profil", "fragen.md"))
+        cfg = self.a.kit.lies_config()
+        neu = e.home_nachziehen(e.werte(cfg), False)
+        self.assertIn(os.path.join("jobs", "morgen.md"), neu)
+        self.assertIn(os.path.join("profil", "fragen.md"), neu)
+        self.assertIn("wohnt in Köln", open(person, encoding="utf-8").read())   # geändert, bleibt
+        self.assertIn("Kennenlernwoche", open(os.path.join(home, "jobs", "morgen.md"), encoding="utf-8").read())
+        os.remove(e.STAND)   # ältere Instanz ohne Stand: nur CLAUDE.md wird erneuert
+        open(claude, "w").write("alte Anweisungen")
+        neu = e.home_nachziehen(e.werte(cfg), False)
+        self.assertEqual(neu, ["CLAUDE.md"])
+        self.assertIn("## Verträge", open(claude, encoding="utf-8").read())
+        self.assertIn("wohnt in Köln", open(person, encoding="utf-8").read())
+
     def test_seite_liegen_geblieben(self):
         self.binden()
         self.a.name_setzen("Mara", "Lotte")

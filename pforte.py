@@ -10,6 +10,8 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /anmelden/wechseln          {t, anbieter}  wechselt zu einer schon verbundenen KI, ohne neue Anmeldung
   POST /einrichten/google          {t, konto, dienste}  Google-Dienst mit den Schaltern starten, Anmeldelink zurück
   POST /einrichten/google-aus      {t}            ohne Google weiter
+  POST /einrichten/fragebogen      {t, antworten} Kennenlern-Fragebogen speichern, die KI meldet sich danach
+  POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
   POST /einrichten/fertig          {t}            home/ anlegen, der Assistent stellt sich im Chat vor
   GET  /oauth2callback?...         Rückweg von Google, geht an den Google-Dienst der Instanz
 
@@ -278,6 +280,14 @@ box-shadow:0 1px 3px rgba(14,21,37,.2);transition:transform .15s}
 .schalter input:focus-visible+i{outline:2px solid var(--vb-blau);outline-offset:2px}
 .feld{display:flex;gap:8px}
 .feld input{flex:1}
+textarea{width:100%;font:inherit;font-size:17px;padding:15px 18px;border-radius:16px;border:1.5px solid var(--vb-linie);
+  margin:6px 0 12px;resize:vertical;font-weight:400;background:#fff;color:inherit}
+textarea:focus{outline:none;border-color:var(--vb-blau)}
+.frage{margin:4px 0 0;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}
+.chip{border:1.5px solid var(--vb-linie);background:#fff;color:inherit;border-radius:999px;padding:9px 15px;font:inherit;
+  font-size:15px;cursor:pointer;transition:background .15s,color .15s}
+.chip[aria-pressed=true]{background:var(--vb-blau);border-color:var(--vb-blau);color:#fff}
 .einfuegen{border:0;border-radius:16px;background:#E7EDFB;color:var(--vb-blau);font-family:inherit;font-weight:600;font-size:15px;
 padding:0 16px;margin-bottom:12px;cursor:pointer}
 .knopf+.knopf{margin-top:10px}
@@ -304,6 +314,8 @@ ICON = {
     "mail": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
             'stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/>'
             '<path d="m3 7 9 6 9-6"/></svg>',
+    "sprechblase": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                   'stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
     "kreuz": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" '
              'stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>',
 }
@@ -338,7 +350,7 @@ def einrichtungsseite(name, bot):
         for k, icon, titel, was in (("kalender", "kalender", "Kalender", "Termine und Aufgaben"),
                                     ("mail", "mail", "Mail", "Lesen, Entwürfe, Drive")))
     inhalt = f"""
-<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span></nav>
+<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span><span data-zu="profil">Über dich</span></nav>
 <p class="karte" id="abgelaufen" hidden>Dieser Link ist abgelaufen. Schick deinem Bot /start, dann bekommst du einen neuen.</p>
 <section class="karte stufe" id="s-namen">{kopf("namen", "person", "Namen")}
   <div class="inhalt">
@@ -385,6 +397,21 @@ def einrichtungsseite(name, bot):
     <button class="knopf ohne" id="google-aus">Ohne Google weiter</button>
   </div>
 </section>
+<section class="karte stufe" id="s-profil">{kopf("profil", "sprechblase", "Über dich")}
+  <div class="inhalt">
+    <p>Damit <span class="an">dein Assistent</span> dich von Anfang an kennt.</p>
+    <label>Wo wohnst du?<input id="f-wohnort" maxlength="200" placeholder="zum Beispiel Köln-Ehrenfeld"></label>
+    <label>Was machst du beruflich oder tagsüber?<input id="f-arbeit" maxlength="300" placeholder="zum Beispiel Lehrerin an einer Grundschule"></label>
+    <label>Wer gehört zu deinem Alltag?<textarea id="f-menschen" rows="3" maxlength="600" placeholder="zum Beispiel Partner Tim, Tochter Mia (6), Mama in Bonn"></textarea></label>
+    <label>Was steht jede Woche fest an?<textarea id="f-woche" rows="2" maxlength="600" placeholder="zum Beispiel dienstags Sport, freitags Mia vom Turnen abholen"></textarea></label>
+    <p class="frage">Wobei soll <span class="an">dein Assistent</span> vor allem helfen?</p><div class="chips" id="f-hilfe"></div>
+    <p class="frage">Wie soll <span class="an">dein Assistent</span> mit dir reden?</p><div class="chips" id="f-ton"></div>
+    <label>Was sollte <span class="an">dein Assistent</span> sonst noch wissen?<textarea id="f-sonst" rows="2" maxlength="600"></textarea></label>
+    <p class="fehler" id="profil-fehler" hidden></p>
+    <button class="knopf" id="profil-weiter">Speichern</button>
+    <button class="knopf ohne" id="profil-aus">Überspringen</button>
+  </div>
+</section>
 <section id="fertig" hidden><div class="buehne"><span class="kachel">{ICON["haken"]}</span><b id="fertig-titel">Fertig</b>
   <span id="fertig-text"></span><button class="knopf hell" id="zu-telegram">Zu Telegram</button></div></section>"""
     skript = """<script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -392,7 +419,7 @@ def einrichtungsseite(name, bot):
 const BOT=__BOT__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
 const t=new URLSearchParams(location.search).get('t'),$=id=>document.getElementById(id);
-const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google'];
+const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
 let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false;
 async function stand(){try{const r=await fetch('einrichten/stand?t='+encodeURIComponent(t));return r.ok?r.json():null}catch(e){return null}}
 async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:{'content-type':'application/json'},
@@ -400,13 +427,15 @@ async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:
 function oeffne(url){if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}
 function fehler(id,text){$(id).textContent=text||'';$(id).hidden=!text}
 function erledigt(){return{namen:!!(S.person&&S.assistent),ki:!!S.anbieter,
-  google:!S.google.moeglich||S.google.verbunden||S.google.uebersprungen}}
+  google:!S.google.moeglich||S.google.verbunden||S.google.uebersprungen,profil:!!(S.fragebogen&&S.fragebogen.erledigt)}}
 function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
   const e=erledigt();$('s-google').hidden=!S.google.moeglich;
   document.querySelector('[data-zu=google]').hidden=!S.google.moeglich;
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
-    google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':'')};
+    google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
+    profil:S.fragebogen&&Object.keys(S.fragebogen.antworten||{}).length?'Beantwortet':'Übersprungen'};
+  document.querySelectorAll('.an').forEach(x=>x.textContent=S.assistent||'dein Assistent');
   for(const k of STUFEN){const el=$('s-'+k),fertig=e[k]&&k!==offen;
     el.classList.toggle('offen',k===offen);el.classList.toggle('erledigt',fertig);
     el.querySelector('.aendern').hidden=!fertig||!!zeit;el.querySelector('.erledigt-text').textContent=fertig?texte[k]:'';
@@ -475,16 +504,32 @@ $('google-los').onclick=async()=>{
     if(s&&s.google.verbunden){clearInterval(googleZeit);S=s;$('google-los').hidden=false;$('google-link-teil').hidden=true;weiter()}},2000)};
 $('google-link').onclick=()=>oeffne($('google-link').dataset.url);
 $('google-aus').onclick=async()=>{await post('einrichten/google-aus',{});S.google.uebersprungen=true;weiter()};
+function chips(id,werte,mehrere,gewaehlt){const box=$(id);box.innerHTML='';for(const w of werte){const c=document.createElement('button');
+  c.className='chip';c.type='button';c.textContent=w;c.setAttribute('aria-pressed',String(gewaehlt.includes(w)));
+  c.onclick=()=>{if(!mehrere)box.querySelectorAll('.chip').forEach(x=>{if(x!==c)x.setAttribute('aria-pressed','false')});
+    c.setAttribute('aria-pressed',String(c.getAttribute('aria-pressed')!=='true'))};box.appendChild(c)}}
+const gewaehlt=id=>[...$(id).querySelectorAll('.chip[aria-pressed=true]')].map(x=>x.textContent);
+function fragebogenFuellen(){const f=S.fragebogen||{antworten:{},hilfe:[],ton:[]},a=f.antworten||{};
+  for(const k of FELDER)$('f-'+k).value=a[k]||'';
+  chips('f-hilfe',f.hilfe||[],true,a.hilfe||[]);chips('f-ton',f.ton||[],false,a.ton?[a.ton]:[])}
+$('profil-weiter').onclick=async()=>{const a={};for(const k of FELDER)a[k]=$('f-'+k).value.trim();
+  a.hilfe=gewaehlt('f-hilfe');a.ton=gewaehlt('f-ton')[0]||'';
+  $('profil-weiter').disabled=true;const r=await post('einrichten/fragebogen',{antworten:a});$('profil-weiter').disabled=false;
+  if(r.ok===false)return fehler('profil-fehler',r.fehler);fehler('profil-fehler','');
+  S.fragebogen=Object.assign(S.fragebogen||{},{erledigt:true,antworten:a});weiter()};
+$('profil-aus').onclick=async()=>{await post('einrichten/fragebogen-aus',{});
+  S.fragebogen=Object.assign(S.fragebogen||{},{erledigt:true});weiter()};
 (async()=>{S=await stand();
   if(!S){$('abgelaufen').hidden=false;for(const k of STUFEN)$('s-'+k).hidden=true;return}
   $('person').value=S.person||'';$('assistent').value=S.assistent||'';$('konto').value=S.google.konto||'';
   if(S.google.dienste.length)document.querySelectorAll('[data-dienst]').forEach(x=>x.checked=S.google.dienste.includes(x.dataset.dienst));
+  fragebogenFuellen();
   const sprung=new URLSearchParams(location.search).get('wo')||location.hash.slice(1);
   if(STUFEN.includes(sprung)&&S.eingerichtet){oeffnen(sprung);return}
   weiter()})();
 </script>""".replace("__BOT__", json.dumps(bot or ""))
     return seite(name, "Einrichten", "Einrichten",
-                 "Namen, KI, Kalender, dann meldet sich dein Assistent in Telegram.", inhalt, skript)
+                 "Namen, KI, Kalender und ein paar Fragen, dann meldet sich dein Assistent in Telegram.", inhalt, skript)
 
 
 def ergebnisseite(name, bot, gut):
@@ -569,7 +614,7 @@ def handler_fuer(pforte):
         def do_POST(self):
             h = pforte.hooks
             laenge = int(self.headers.get("content-length") or 0)
-            if laenge > 4096:
+            if laenge > 16384:
                 return self.senden(413, {"ok": False})
             try:
                 d = json.loads(self.rfile.read(laenge) or b"{}")
@@ -598,6 +643,13 @@ def handler_fuer(pforte):
                 dienste = d.get("dienste") if isinstance(d.get("dienste"), list) else []
                 url, f = h["google_start"](str(d.get("konto") or ""), [str(x) for x in dienste])
                 return self.senden(200, {"ok": bool(url), "url": url or "", "fehler": f})
+            if self.path == "/einrichten/fragebogen":
+                antworten = d.get("antworten") if isinstance(d.get("antworten"), dict) else {}
+                f = h["fragebogen"](antworten)
+                return self.senden(200, {"ok": not f, "fehler": f})
+            if self.path == "/einrichten/fragebogen-aus":
+                h["fragebogen_aus"]()
+                return self.senden(200, {"ok": True})
             if self.path == "/einrichten/google-aus":
                 h["google_aus"]()
                 return self.senden(200, {"ok": True})

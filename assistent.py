@@ -218,6 +218,9 @@ def einrichten_hinweis(immer=False, wo=""):
         text = ("Tipp auf Einrichten, das dauert drei Minuten. Du brauchst nur dein Abo bei Claude oder ChatGPT."
                 + (" Deine Nachrichten beantworte ich, sobald ich eingerichtet bin." if not immer else ""))
         return sende_knopf(text, "Einrichten", url)
+    if wo == "profil":
+        return sende_knopf("Damit ich dich schneller kennenlerne: sieben kurze Fragen, das dauert drei Minuten.",
+                           "Fragen beantworten", url)
     if wo == "google":
         return sende_knopf("Hier verbindest du deinen Kalender und deine Mails oder schaltest einen davon ab.",
                            "Kalender und Mail", url)
@@ -378,7 +381,7 @@ def abschliessen():
     with _lock:
         st = load()
         st.pop("anmeldelink", None)
-        begruessen = not st.get("begruesst")
+        begruessen = not st.get("begruesst") and not st.get("fragebogen")   # sonst meldet sich die KI selbst
         st["begruesst"] = st.get("begruesst") or time.time()
         save(st)
     if begruessen:
@@ -395,6 +398,77 @@ def liegen_geblieben():
         log("Einrichtungsseite liegen geblieben, schließe ohne Google ab")
         return not abschliessen()
     return False
+
+
+FRAGEBOGEN = (("wohnort", "Wo wohnst du?"), ("arbeit", "Was machst du beruflich oder tagsüber?"),
+              ("menschen", "Wer gehört zu deinem Alltag?"), ("woche", "Was steht jede Woche fest an?"),
+              ("hilfe", "Wobei soll ich vor allem helfen?"), ("ton", "Wie soll ich mit dir reden?"),
+              ("sonst", "Was sollte ich sonst noch wissen?"))
+HILFE_WAHL = ("Termine", "Fristen und Papierkram", "Haushalt und Einkauf", "Ideen festhalten", "Arbeit",
+              "Gesundheit und Sport")
+TON_WAHL = ("Locker", "Herzlich", "Kurz und sachlich")
+
+
+def fragebogen_speichern(antworten):
+    """Antworten von der Einrichtungsseite: merken und der KI den Auftrag geben, daraus Wissen zu machen und sich
+    mit einer ersten Nachricht zu melden. Rückgabe: Fehlertext oder ''."""
+    a = {}
+    for k, _ in FRAGEBOGEN:
+        v = antworten.get(k) if isinstance(antworten, dict) else None
+        if k == "hilfe":
+            v = [x for x in HILFE_WAHL if isinstance(v, list) and x in v]
+        elif k == "ton":
+            v = v if v in TON_WAHL else ""
+        else:
+            v = " ".join(str(v or "").split())[:600]
+        if v:
+            a[k] = v
+    if not a:
+        return "Beantworte mindestens eine Frage oder tipp auf Überspringen."
+    with _lock:
+        st = load()
+        erneut = bool(st.get("fragebogen"))
+        st["fragebogen"] = {"antworten": a, "zeit": time.time()}
+        st.pop("fragebogen_uebersprungen", None)
+        save(st)
+    zeilen = "\n".join(f"- {frage} {', '.join(a[k]) if isinstance(a[k], list) else a[k]}"
+                       for k, frage in FRAGEBOGEN if k in a)
+    bis = (jetzt() + datetime.timedelta(days=7)).date().isoformat()
+    prompt = (f"[Einrichtung, {stempel()}: {PERSON} hat den Kennenlern-Fragebogen {'geändert' if erneut else 'ausgefüllt'}. "
+              f"Die Antworten, wörtlich:]\n{zeilen}\n\n"
+              "Mach daraus Wissen, ohne etwas hinzuzudichten:\n"
+              f"1. Trag die Fakten in `profil/person.md` in die passenden Abschnitte ein. Menschen mit Namen bekommen "
+              "zusätzlich eine Zeile in `leben/menschen.md` (wer, Beziehung, was {PERSON} über sie gesagt hat).\n"
+              "2. Den gewünschten Ton und wobei du helfen sollst, trägst du in `profil/assistent.md` ein.\n"
+              "3. In `profil/fragen.md` streichst du, was jetzt beantwortet ist, und ergänzt drei bis fünf Nachfragen zu "
+              "dem, was fehlt oder neugierig macht. "
+              + ("" if erneut else f"Oben in die Datei kommt die Zeile `Kennenlernwoche bis: {bis}`. ")
+              + "Feste Wochentermine legst du nicht ohne Nachfrage als Zeitpläne an.\n\n"
+              + (f"Dann bestätigst du {PERSON} in einem Satz, dass du es übernommen hast."
+                 if erneut else
+                 f"Dann schreibst du {PERSON} deine erste Nachricht: zwei bis vier Sätze, die zeigen, dass du zugehört "
+                 "hast (ein, zwei Dinge aus den Antworten aufgreifen, nicht alles aufzählen). Sag beiläufig, dass "
+                 f"{PERSON} dir Verträge und Briefe einfach als Foto oder PDF schicken kann, und stell genau eine "
+                 "Nachfrage. Kein Fragebogen-Ton, keine Zusammenfassung, keine Liste."))
+    einreihen("job", ["kennenlernen", {"prompt": prompt, "gespraech": "chat", "modell": "standard",
+                                         "effort": "medium", "melden": "antwort"}])
+    notiere("System", f"Fragebogen {'geändert' if erneut else 'ausgefüllt'}")
+    log(f"Fragebogen {'geändert' if erneut else 'ausgefüllt'}: {', '.join(a)}")
+    return ""
+
+
+def fragebogen_ueberspringen():
+    update(fragebogen_uebersprungen=time.time())
+
+
+def fragebogen_anbieten():
+    """Ältere Einrichtungen ohne Fragebogen bekommen ihn einmal angeboten."""
+    st = load()
+    if not WEB or not eingerichtet() or st.get("fragebogen") or st.get("fragebogen_uebersprungen") \
+            or st.get("fragebogen_angeboten"):
+        return
+    update(fragebogen_angeboten=time.time())
+    einrichten_hinweis(immer=True, wo="profil")
 
 
 def verbundene():
@@ -435,6 +509,9 @@ def einrichtung_stand():
     st = load()
     return {"person": PERSON, "assistent": NAME, "anbieter": KI_ANBIETER, "eingerichtet": eingerichtet(),
             "verbunden": verbundene(),
+            "fragebogen": {"erledigt": bool(st.get("fragebogen") or st.get("fragebogen_uebersprungen")),
+                           "antworten": (st.get("fragebogen") or {}).get("antworten", {}),
+                           "hilfe": list(HILFE_WAHL), "ton": list(TON_WAHL)},
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))}}
@@ -471,7 +548,8 @@ def pforte_starten():
             "name": lambda: NAME or "Dein Assistent", "bot": bot_sicher, "link_gueltig": link_gueltig,
             "fertig": anmeldung_fertig, "google": google_web, "stand": einrichtung_stand, "namen": name_setzen,
             "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen,
-            "wechseln": ki_wechseln})
+            "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
+            "fragebogen_aus": fragebogen_ueberspringen})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
         return srv
     except OSError as e:
@@ -1942,6 +2020,10 @@ def dienst():
             pass
     threading.Thread(target=arbeiter, daemon=True).start()
     threading.Thread(target=zeitplan, daemon=True).start()
+    try:
+        fragebogen_anbieten()
+    except Exception as e:
+        log(f"Fragebogen nicht angeboten ({e})")
     while True:
         try:
             res = telegram("getUpdates", {"timeout": 50, "offset": load().get("offset", 0),
