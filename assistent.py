@@ -34,6 +34,7 @@ erst, wenn die Person die Einrichtung abschließt.
 import base64
 import datetime
 import glob
+import hashlib
 import hmac
 import json
 import os
@@ -46,11 +47,13 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from zoneinfo import ZoneInfo
 
 import requests
 
+import ablage
 import anbieter
 import einrichten
 import kit
@@ -233,6 +236,147 @@ def einrichten_hinweis(immer=False, wo=""):
 
 anmelden_hinweis = einrichten_hinweis   # alter Name
 
+BEREICHE = {"ki": "KI wechseln", "kalender": "Kalender und Mail", "ablage": "Ablage", "daten": "Meine Daten",
+            "profil": "Über dich", "whatsapp": "WhatsApp"}   # [einstellungen: <bereich>] in Antworten der KI
+
+
+def einstellungen_link(bereich=""):
+    wo = {"kalender": "google"}.get(bereich, bereich)
+    return f"{WEB}/einstellungen" + (f"?wo={wo}" if wo in BEREICHE or wo == "google" else "")
+
+
+def menue_setzen():
+    """Fester Knopf „Einstellungen“ neben dem Eingabefeld (Web App mit fester Adresse, Zugang prüft webapp_sitzung).
+    Ohne Webadresse bleibt das Befehlsmenü."""
+    if not (WEB and PERSON_ID):
+        return
+    try:
+        telegram("setChatMenuButton", {"chat_id": PERSON_ID, "menu_button": {
+            "type": "web_app", "text": "Einstellungen", "web_app": {"url": einstellungen_link()}}})
+    except Exception as e:
+        log(f"Menüknopf nicht gesetzt ({e})")
+
+
+def webapp_sitzung(init_data):
+    """Seite aus dem Menüknopf oder einem Web-App-Knopf: Telegram signiert initData mit dem Bot-Token
+    (core.telegram.org/bots/webapps, „Validating data received via the Mini App“). Stimmt die Signatur und gehört
+    das Konto der Person, bekommt die Seite einen Schlüssel wie aus dem Einrichtungslink."""
+    try:
+        paare = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
+    except ValueError:
+        return ""
+    pruef = paare.pop("hash", "")
+    text = "\n".join(f"{k}={v}" for k, v in sorted(paare.items()))
+    schluessel = hmac.new(b"WebAppData", (secret("TG_TOKEN") or "").encode(), hashlib.sha256).digest()
+    if not pruef or not hmac.compare_digest(hmac.new(schluessel, text.encode(), hashlib.sha256).hexdigest(), pruef):
+        return ""
+    try:
+        alter = time.time() - int(paare.get("auth_date") or 0)
+        konto = int((json.loads(paare.get("user") or "{}") or {}).get("id") or 0)
+    except (ValueError, TypeError, AttributeError):
+        return ""
+    if alter > 86400 or not PERSON_ID or konto != PERSON_ID:
+        return ""
+    return anmeldelink().split("t=", 1)[1]
+
+
+# --- Ablage außerhalb des Servers (ablage.py) ------------------------------------------
+
+def drive_moeglich():
+    return bool(GOOGLE_PORT and load().get("google_verbunden") and "mail" in CFG["google"]["dienste"].split(","))
+
+
+def ablage_stand():
+    return ablage.zustand(drive_moeglich())
+
+
+def daten_senden():
+    """home/ als ZIP in den Chat. Rückgabe: Fehlertext oder ''."""
+    try:
+        pfad = ablage.zip_bauen(HOME_DIR, NAME)
+    except ablage.AblageFehler as e:
+        return str(e)
+    try:
+        sende_datei(pfad)
+    except Exception as e:
+        log(f"ZIP nicht gesendet ({type(e).__name__})")
+        return "Telegram hat die Datei gerade nicht angenommen. Versuch es gleich noch einmal."
+    finally:
+        os.unlink(pfad)
+    return ""
+
+
+def ablage_aktion(aktion, d):
+    """Knöpfe der Karten Ablage und Meine Daten. Rückgabe: (fehler, dict für die Seite)."""
+    mehr = {}
+    try:
+        if aktion == "ablage/verbinden":
+            mehr = ablage.verbinden(str(d.get("ziel") or ""), drive_moeglich())
+        elif aktion == "ablage/code":
+            ablage.dropbox_code(str(d.get("code") or ""))
+        elif aktion == "ablage/aus":
+            ablage.trennen()
+            notiere("System", "Ablage getrennt, alles bleibt auf dem Server")
+        elif aktion == "ablage/monatlich":
+            ablage.setze(monatlich=d.get("an") is True)
+        elif aktion == "daten/senden":
+            return daten_senden(), {}
+        else:
+            return "Das kenne ich nicht.", {}
+    except ablage.AblageFehler as e:
+        return str(e), {"ablage": ablage_stand()}
+    return "", {**mehr, "ablage": ablage_stand()}
+
+
+def ablage_verbunden(ziel):
+    """Nach dem Verbinden gleich einmal spiegeln, damit die Person den Ordner sofort sieht."""
+    notiere("System", f"Ablage verbunden: {ablage.ZIELE[ziel]}")
+    try:
+        ablage.spiegeln(HOME_DIR, NAME)
+    except ablage.AblageFehler as e:
+        ablage.setze(fehler=str(e))
+        return log(f"Erster Spiegel: {e}")
+    sende_text(f"{ablage.ZIELE[ziel]} ist verbunden. Im Ordner „{ablage.ordnername(NAME)}“ liegt jetzt eine Kopie von "
+               "meinem Gedächtnis und unserem Chat, ab jetzt jede Nacht neu.")
+
+
+ablage.bei_verbunden = ablage_verbunden
+_ablage_lauf = threading.Lock()
+
+
+def ablage_faellig(st, t):
+    a = ablage.lies()
+    nacht = a.get("ziel") and (t.hour, t.minute) >= (TAGESWECHSEL, 30) and st.get("gespiegelt") != t.date().isoformat()
+    monat = a.get("monatlich") and t.day == 1 and t.hour >= 9 and st.get("zip_monat") != t.strftime("%Y-%m")
+    return bool(nacht or monat)
+
+
+def ablage_nachts(t):
+    """Zeitplan: einmal je Nacht spiegeln, am Ersten des Monats auf Wunsch das ZIP in den Chat. Ein neuer Fehler
+    kommt einmal als Nachricht mit Knopf zur Seite, dort steht der Weg."""
+    if not _ablage_lauf.acquire(blocking=False):
+        return
+    try:
+        a, st = ablage.lies(), load()
+        if a.get("ziel") and st.get("gespiegelt") != t.date().isoformat():
+            update(gespiegelt=t.date().isoformat())
+            try:
+                ablage.spiegeln(HOME_DIR, NAME)
+            except ablage.AblageFehler as e:
+                ablage.setze(fehler=str(e))
+                log(f"Ablage: {e}")
+                if a.get("fehler") != str(e):
+                    sende_knopf(str(e), "Ablage", einstellungen_link("ablage")) if WEB else sende_text(str(e))
+        if a.get("monatlich") and t.day == 1 and t.hour >= 9 and st.get("zip_monat") != t.strftime("%Y-%m"):
+            update(zip_monat=t.strftime("%Y-%m"))
+            f = daten_senden()
+            if f:
+                sende_text(f)
+    except Exception as e:
+        log(f"Ablage im Zeitplan: {type(e).__name__}: {e}")
+    finally:
+        _ablage_lauf.release()
+
 
 OHNE_CODE_GEANTWORTET = set()
 
@@ -257,6 +401,7 @@ def binden(frm, text):
         kit.setze_config("person", "name", vorname)
         PERSON = vorname
     log("Telegram-Konto über den Einladungslink verbunden")
+    menue_setzen()
     sende_text(f"Hallo{' ' + PERSON if PERSON else ''}, schön, dass du da bist. Ich bin dein neuer Assistent.")
     einrichten_hinweis(immer=True)
 
@@ -524,7 +669,8 @@ def einrichtung_stand():
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))},
-            "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"}}
+            "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"},
+            "ablage": ablage_stand()}
 
 
 def google_web(query):
@@ -559,7 +705,7 @@ def pforte_starten():
             "fertig": anmeldung_fertig, "google": google_web, "stand": einrichtung_stand, "namen": name_setzen,
             "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen,
             "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
-            "fragebogen_aus": fragebogen_ueberspringen, **({"wa_link_gueltig": wa_link_gueltig,
+            "fragebogen_aus": fragebogen_ueberspringen, "sitzung": webapp_sitzung, "ablage": ablage_aktion, **({"wa_link_gueltig": wa_link_gueltig,
             "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding}
                                                            if wa_moeglich() else {})})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
@@ -786,10 +932,25 @@ def knoepfe_aus(text):
     return "\n".join(zeilen).strip(), knoepfe
 
 
+def einstellungen_aus(text):
+    """Zeile `[einstellungen: <bereich>]`: die Antwort bekommt einen Knopf, der die Seite an dieser Stelle öffnet."""
+    bereich, zeilen = None, []
+    for z in text.splitlines():
+        m = re.fullmatch(r"\s*\[einstellungen(?::\s*([a-zäöü]*))?\]\s*", z.lower())
+        if m:
+            bereich = bereich or (m.group(1) or "").strip()
+        else:
+            zeilen.append(z)
+    return "\n".join(zeilen).strip(), bereich
+
+
 def antworte(text):
     text, pfade = dateien_aus(text)
     text, knoepfe = knoepfe_aus(text)
-    if text:
+    text, bereich = einstellungen_aus(text)
+    if text and bereich is not None and WEB:
+        sende_knopf(text, BEREICHE.get(bereich, "Einstellungen"), einstellungen_link(bereich))
+    elif text:
         sende_text(text, knoepfe=knoepfe)
     for p in pfade:
         try:
@@ -2204,6 +2365,8 @@ def zeitplan():
             if runde % 60 == 0 and st.get("zu_sichern") and "__sichern__" not in _eingereiht:
                 _eingereiht.add("__sichern__")
                 einreihen("sichern", None)
+            if fertig and ablage_faellig(st, t):
+                threading.Thread(target=ablage_nachts, args=(t,), daemon=True).start()
             if runde % 10 == 0:
                 wa_anbieten()
             if runde % 120 == 0:
@@ -2383,6 +2546,7 @@ def dienst():
     except Exception as e:
         log(f"Telegram beim Start nicht erreicht ({e})")
     pforte_starten()
+    menue_setzen()
     if not KI_ANBIETER or not eingerichtet():
         log("Noch nicht eingerichtet, Nachrichten warten auf die Einrichtungsseite")
     jobs()

@@ -19,7 +19,7 @@ Schau nach:
 - `profil/fragen.md`: Steht dort eine offene Frage, stellst du am Ende genau eine davon, beiläufig und einfach zu beantworten (in der Kennenlernwoche bis zu zwei, siehe CLAUDE.md). Ist die Datei leer, keine Frage
 - Fehlt dir etwas für einen guten Morgen-Check, bittest du am Ende darum, statt die Lücke zu übergehen (Regel in CLAUDE.md, Abschnitt Kennenlernen, Vermerk unter `## Gebeten` in `leben/kennenlernen.md`). Etwa:
 <!-- google -->
-  noch kein Kalender („Damit ich dir morgens sagen kann, was ansteht, gib mir Zugriff auf deinen Kalender: einfach /google tippen“),
+  noch kein Kalender („Damit ich dir morgens sagen kann, was ansteht, gib mir Zugriff auf deinen Kalender“ und darunter die Zeile `[einstellungen: kalender]`),
 <!-- /google -->
   keine To-dos in `leben/todo.md` („Schick mir, was diese Woche erledigt werden muss, dann behalte ich es im Blick“), keine Verträge in `leben/vertraege.md`. Eine Bitte je Morgen, und sie ersetzt dann die Frage aus `profil/fragen.md`
 

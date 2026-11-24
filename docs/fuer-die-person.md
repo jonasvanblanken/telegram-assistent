@@ -12,7 +12,7 @@ Du bekommst einen eigenen Assistenten, der in Telegram mit dir schreibt. Er hilf
 
 1. Tipp auf den Link, den ich dir schicke, oder scann den QR-Code. Telegram öffnet deinen Bot, du tippst auf „Starten“
 2. Er begrüßt dich und zeigt den Knopf „Einrichten“. Dort gibst du deinem Assistenten einen Namen, wählst deine KI und meldest dich an. Bei Claude und Gemini fügst du am Ende einen Code ein, bei ChatGPT tippst du einen Code bei OpenAI ein
-3. Zum Schluss schaltest du Kalender und Mail ein oder aus und meldest dich bei Google an. Kommt die Warnung „Google hat diese App nicht überprüft“, tippst du auf „Erweitert“ und dann auf „Weiter“. Ohne Google geht es auch, das lässt sich später mit `/google` nachholen
+3. Zum Schluss schaltest du Kalender und Mail ein oder aus und meldest dich bei Google an. Kommt die Warnung „Google hat diese App nicht überprüft“, tippst du auf „Erweitert“ und dann auf „Weiter“. Ohne Google geht es auch, das lässt sich später unter Einstellungen nachholen
 
 Danach stellt sich dein Assistent im Chat vor. Das Ganze dauert drei Minuten.
 
@@ -23,8 +23,8 @@ Danach stellt sich dein Assistent im Chat vor. Das Ganze dauert drei Minuten.
 - Morgens um halb acht kommt eine kurze Nachricht. Ist dir die Zeit zu früh oder willst du abends nichts hören, sag es ihm einfach
 - Er schickt nie selbst Mails. Er legt Entwürfe an, abschicken tust du
 - Passwörter, PINs und TANs gehören nicht in den Chat
+- Der Knopf „Einstellungen“ neben dem Eingabefeld öffnet eine Seite: dort wechselst du die KI, schaltest Kalender und Mail dazu, legst eine Kopie deiner Daten in Dropbox, OneDrive oder Google Drive oder holst dir alles als Datei in den Chat
 - `/status` zeigt, woran er gerade ist
-- `/ki` wechselt zwischen deinen KIs, etwa von Claude zu ChatGPT, oder verbindet eine weitere. `/anmelden` öffnet die Einrichtung wieder, `/google` dasselbe für Kalender und Mail
 
 ## Wer was sieht
 

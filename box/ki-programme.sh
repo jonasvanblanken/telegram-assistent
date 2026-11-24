@@ -42,6 +42,13 @@ fi
 chown -R root:root "$ZIEL"
 chmod -R go-w "$ZIEL"
 
+# rclone spiegelt home/ auf Wunsch nach Google Drive, Dropbox oder OneDrive (ablage.py). Ein Programm für alle drei.
+if ! command -v rclone >/dev/null && command -v apt-get >/dev/null; then
+  echo "   rclone für die Ablage"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 rclone >/dev/null \
+    || echo "   rclone ließ sich nicht installieren, die Ablage in der Cloud fehlt dann" >&2
+fi
+
 # Ubuntu ab 24.04 sperrt User-Namespaces für normale Programme. Die Sandbox von Codex (bubblewrap) braucht sie,
 # sonst scheitert jeder Befehl unter ChatGPT („bwrap: setting up uid map: Permission denied“) und der Assistent
 # kann keine Datei lesen. Weg nach der Codex-Doku (developers.openai.com/codex/concepts/sandboxing): bubblewrap aus

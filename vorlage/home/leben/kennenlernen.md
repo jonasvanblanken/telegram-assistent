@@ -18,6 +18,7 @@ Der Lauf `jobs/vorstellen.md` stellt {{PERSON}} je Nachricht eine Funktion vor u
 - Mails: „Ist heute etwas Wichtiges gekommen?“, Antworten als Entwurf, die nur noch abgeschickt werden müssen
 <!-- /google -->
 - Nachschauen im Netz: Öffnungszeiten, Notdienste, Preise vergleichen, „Welche Apotheke hat heute Notdienst?“
+- Deine Daten bei dir: auf Wunsch jede Nacht eine Kopie von Gedächtnis und Chat in einen eigenen Cloud-Ordner, oder einmal im Monat alles als Datei hier im Chat. Zeile `[einstellungen: ablage]` unter die Nachricht
 - Eigene Zeiten: Morgen- und Abendnachricht verschieben oder abstellen, „Schreib mir morgens erst um 8“
 
 ## Gebeten

@@ -136,7 +136,7 @@ class Instanz:
     def laden(self, telegram_api):
         os.environ.update(self.env)
         os.environ["ASSISTENT_TELEGRAM_API"] = telegram_api
-        for m in ("kit", "anbieter", "pforte", "einrichten", "assistent"):
+        for m in ("kit", "ablage", "anbieter", "pforte", "einrichten", "assistent"):
             sys.modules.pop(m, None)
         return importlib.import_module("assistent")
 
@@ -659,6 +659,105 @@ class Anmeldeseite(Chat, unittest.TestCase):
         ergebnis = self.a.pruefen()
         self.assertTrue(all(ok for ok, _ in ergebnis), ergebnis)
         self.assertTrue(any("Einrichtungsseite" in x for _, x in ergebnis))
+
+
+    # --- Einstellungen über den Menüknopf, Ablage, Meine Daten -------------------------------------------------
+
+    def init_data(self, konto=4242, token="123:abc", alter=0):
+        """initData wie Telegram sie signiert (core.telegram.org/bots/webapps, Validating data)."""
+        import hashlib, hmac, urllib.parse
+        felder = {"auth_date": str(int(time.time() - alter)), "query_id": "AAH",
+                  "user": json.dumps({"id": konto, "first_name": "Mara"}, separators=(",", ":"))}
+        text = "\n".join(f"{k}={v}" for k, v in sorted(felder.items()))
+        geheim = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        felder["hash"] = hmac.new(geheim, text.encode(), hashlib.sha256).hexdigest()
+        return urllib.parse.urlencode(felder)
+
+    def einrichten_fertig(self):
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")
+
+    def test_einstellungen_ueber_menueknopf(self):
+        self.einrichten_fertig()
+        status, seite = self.holen("/einstellungen")
+        self.assertEqual(status, 200)
+        self.assertIn("<h1>Einstellungen</h1>", seite)
+        r = self.senden("/einstellungen/sitzung", {"initData": self.init_data()})
+        self.assertTrue(r["ok"])
+        stand = json.loads(self.holen(f"/einrichten/stand?t={r['t']}")[1])
+        self.assertTrue(stand["eingerichtet"])
+        self.assertEqual(stand["ablage"]["ziel"], "")
+        # fremdes Konto, falscher Bot, veraltet, verändert: kein Zugang
+        for daten in (self.init_data(konto=999), self.init_data(token="9:zzz"), self.init_data(alter=2 * 86400),
+                      self.init_data().replace("Mara", "Eva"), ""):
+            self.assertEqual(self.senden("/einstellungen/sitzung", {"initData": daten}), {"ok": False, "t": ""})
+
+    def test_menueknopf_beim_start(self):
+        FalscherServer.anfragen.clear()
+        self.a.menue_setzen()
+        knopf = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "setChatMenuButton"]
+        self.assertEqual(len(knopf), 1)
+        self.assertEqual(json.loads(knopf[0]["menu_button"])["web_app"]["url"], "https://box.example.de/test/einstellungen")
+
+    def test_einstellungen_knopf_in_antwort(self):
+        FalscherServer.anfragen.clear()
+        self.a.antworte("Das stellst du unter Einstellungen um.\n[einstellungen: kalender]")
+        n = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"]
+        self.assertEqual(len(n), 1)
+        self.assertNotIn("[einstellungen", n[0]["text"])
+        knopf = json.loads(n[0]["reply_markup"])["inline_keyboard"][0][0]
+        self.assertEqual(knopf["text"], "Kalender und Mail")
+        self.assertEqual(knopf["web_app"]["url"], "https://box.example.de/test/einstellungen?wo=google")
+
+    def test_daten_als_zip(self):
+        import zipfile
+        self.einrichten_fertig()
+        os.makedirs(os.path.join(self.a.HOME_DIR, "eingang"), exist_ok=True)
+        open(os.path.join(self.a.HOME_DIR, "eingang", "foto.jpg"), "w").write("x")
+        pfad = self.a.ablage.zip_bauen(self.a.HOME_DIR, "Lotte")
+        namen = zipfile.ZipFile(pfad).namelist()
+        os.unlink(pfad)
+        self.assertIn("Lotte/CLAUDE.md", namen)
+        self.assertFalse([n for n in namen if "/eingang/" in n])
+        FalscherServer.anfragen.clear()
+        t = self.token()
+        self.assertEqual(self.senden("/daten/senden", {"t": t})["ok"], True)
+        self.assertTrue([x for x in FalscherServer.anfragen if x.get("methode") == "sendDocument"])
+        self.assertEqual(self.senden("/daten/senden", {"t": "falsch"})["ok"], False)
+
+    def test_ablage_spiegel_mit_rclone(self):
+        self.einrichten_fertig()
+        ab = self.a.ablage
+        bin_ = os.path.join(self.inst.tmp.name, "bin")
+        os.makedirs(bin_)
+        protokoll = os.path.join(self.inst.tmp.name, "rclone.log")
+        with open(os.path.join(bin_, "rclone"), "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {protokoll}\ncat \"$2\" >> {protokoll}\n")
+        os.chmod(os.path.join(bin_, "rclone"), 0o755)
+        alt_path = os.environ["PATH"]
+        os.environ["PATH"] = bin_ + os.pathsep + alt_path
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", alt_path))
+        ab.DROPBOX_APP = "app123"
+        url = self.senden("/ablage/verbinden", {"t": self.token(), "ziel": "dropbox"})["url"]
+        self.assertIn("client_id=app123", url)
+        self.assertIn("code_challenge_method=S256", url)
+        self.assertNotIn("redirect_uri", url)
+        ab.zugang = lambda ziel: ("zugang-xyz", 14400)
+        ab.setze(ziel="dropbox")
+        ab.spiegeln(self.a.HOME_DIR, "Lotte")
+        log = open(protokoll).read()
+        self.assertIn("sync", log)
+        self.assertIn("ziel:Lotte", log)
+        self.assertIn("/eingang/**", log)
+        self.assertIn("type = dropbox", log)
+        self.assertIn("zugang-xyz", log)
+        self.assertTrue(ab.lies()["zuletzt"])
+        self.assertFalse(glob.glob(os.path.join(self.a.STATE_DIR, "tmp*", "rclone.conf")))   # Zugang liegt nicht herum
+        stand = json.loads(self.holen(f"/einrichten/stand?t={self.token()}")[1])["ablage"]
+        self.assertEqual((stand["ziel"], stand["angebot"]), ("dropbox", ["dropbox"]))
+        self.assertTrue(self.senden("/ablage/aus", {"t": self.token()})["ok"])
+        self.assertEqual(ab.lies().get("ziel"), None)
 
 
 class Einladung(Chat, unittest.TestCase):

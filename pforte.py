@@ -323,6 +323,11 @@ ICON = {
     "handy": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
              'stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/>'
              '<path d="M10.5 18.5h3"/></svg>',
+    "ordner": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+              'stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5'
+              'a2 2 0 0 1-2-2z"/></svg>',
+    "paket": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+             'stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
     "kreuz": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" '
              'stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>',
 }
@@ -345,7 +350,7 @@ def kopf(schritt, icon, titel):
             f'<button class="aendern" data-schritt="{schritt}" hidden>Ändern</button></header>')
 
 
-def einrichtungsseite(name, bot):
+def einrichtungsseite(name, bot, einstellungen=False):
     e = html.escape
     wahl = "".join(
         f'<button class="zeile" data-anbieter="{k}"><span class="kachel">{ICON["funke"]}</span>'
@@ -431,13 +436,42 @@ def einrichtungsseite(name, bot):
     <button class="knopf ohne" id="profil-aus">Überspringen</button>
   </div>
 </section>
+<section class="karte stufe offen" id="s-ablage" hidden><header><span class="kachel">{ICON["ordner"]}</span><div><b>Ablage</b><small id="ablage-text"></small></div></header>
+  <div class="inhalt">
+    <p>Auf Wunsch legt <span class="an">dein Assistent</span> jede Nacht eine Kopie von Gedächtnis und Chat-Protokoll in einen Ordner bei dir.</p>
+    <div id="ablage-wahl"></div>
+    <div id="ablage-dropbox" hidden>
+      <p>Dropbox zeigt dir nach der Freigabe einen Code. Kopier ihn und füg ihn hier ein.</p>
+      <button class="knopf" id="ablage-link">Zu Dropbox</button>
+      <div class="feld" style="margin-top:12px"><input id="ablage-code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Code"></div>
+      <button class="knopf" id="ablage-senden">Verbinden</button>
+    </div>
+    <div id="ablage-geraet" hidden>
+      <p>Melde dich bei Microsoft an und gib diesen Code ein. Danach geht es hier von selbst weiter.</p>
+      <div class="code" id="ablage-geraetecode"></div>
+      <button class="knopf leise" id="ablage-kopieren">Code kopieren</button>
+      <button class="knopf" id="ablage-ms">Zu Microsoft</button>
+      <p><span class="warte"></span> Warte auf Microsoft …</p>
+    </div>
+    <p class="fehler" id="ablage-fehler" hidden></p>
+    <button class="knopf ohne" id="ablage-aus" hidden>Nur auf dem Server lassen</button>
+  </div>
+</section>
+<section class="karte stufe offen" id="s-daten" hidden><header><span class="kachel">{ICON["paket"]}</span><div><b>Meine Daten</b><small>Gedächtnis, Profil und Chat-Protokoll als ZIP</small></div></header>
+  <div class="inhalt">
+    <label class="schalter"><span class="kachel">{ICON["kalender"]}</span><span><b>Jeden Monat</b><small>Am Ersten kommt alles als Datei in den Chat</small></span>
+      <input type="checkbox" id="monatlich"><i aria-hidden="true"></i></label>
+    <p class="fehler" id="daten-fehler" hidden></p>
+    <button class="knopf leise" id="daten-jetzt">Jetzt in den Chat schicken</button>
+  </div>
+</section>
 <section id="fertig" hidden><div class="buehne"><span class="kachel">{ICON["haken"]}</span><b id="fertig-titel">Fertig</b>
   <span id="fertig-text"></span><button class="knopf hell" id="zu-telegram">Zu Telegram</button></div></section>"""
     skript = """<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
-const BOT=__BOT__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
+const BOT=__BOT__,ORDNER=__ORDNER__,EINSTELLUNGEN=__EINSTELLUNGEN__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
-const t=new URLSearchParams(location.search).get('t'),$=id=>document.getElementById(id);
+let t=new URLSearchParams(location.search).get('t');const $=id=>document.getElementById(id);
 const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','whatsapp','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
 let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false;
 async function stand(){try{const r=await fetch('einrichten/stand?t='+encodeURIComponent(t));return r.ok?r.json():null}catch(e){return null}}
@@ -458,13 +492,13 @@ function zeichne(){
     google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
     whatsapp:S.whatsapp&&(S.whatsapp.an?'Verbunden':S.whatsapp.wahl==='ja'?'Wird eingerichtet, der QR-Code kommt im Chat':
       S.whatsapp.wahl==='ohne'?'Ohne WhatsApp':'Später im Chat mit /whatsapp')||'',
-    profil:S.fragebogen&&Object.keys(S.fragebogen.antworten||{}).length?'Beantwortet':'Übersprungen'};
+    profil:S.fragebogen&&Object.keys(S.fragebogen.antworten||{}).length?'Beantwortet':S.fragebogen&&S.fragebogen.erledigt?'Übersprungen':'Noch offen'};
   document.querySelectorAll('.an').forEach(x=>x.textContent=S.assistent||'dein Assistent');
-  for(const k of STUFEN){const el=$('s-'+k),fertig=e[k]&&k!==offen;
+  for(const k of STUFEN){const el=$('s-'+k),fertig=(e[k]||S.eingerichtet)&&k!==offen;   // in den Einstellungen ist jeder Bereich offen zum Ändern
     el.classList.toggle('offen',k===offen);el.classList.toggle('erledigt',fertig);
     el.querySelector('.aendern').hidden=!fertig||!!zeit;el.querySelector('.erledigt-text').textContent=fertig?texte[k]:'';
     const n=document.querySelector('[data-zu='+k+']');n.classList.toggle('aktiv',k===offen);n.classList.toggle('fertig',fertig)}
-  wahlZeichnen()}
+  wahlZeichnen();if(S.eingerichtet)ablageZeichnen()}
 function weiter(){
   if(bearbeitet&&S.eingerichtet){offen='';zeichne();return fertig('Gespeichert','Du kannst zurück zu Telegram.')}
   const e=erledigt();offen=STUFEN.find(k=>!e[k])||'';zeichne();if(!offen)abschluss()}
@@ -549,15 +583,67 @@ $('profil-weiter').onclick=async()=>{const a={};for(const k of FELDER)a[k]=$('f-
   S.fragebogen=Object.assign(S.fragebogen||{},{erledigt:true,antworten:a});weiter()};
 $('profil-aus').onclick=async()=>{await post('einrichten/fragebogen-aus',{});
   S.fragebogen=Object.assign(S.fragebogen||{},{erledigt:true});weiter()};
-(async()=>{S=await stand();
-  if(!S){$('abgelaufen').hidden=false;for(const k of STUFEN)$('s-'+k).hidden=true;return}
+const ABLAGE={drive:'Google Drive',dropbox:'Dropbox',onedrive:'OneDrive'};let ablageZeit=null;
+function wann(s){const d=new Date(s*1000),tag=d.toDateString()===new Date().toDateString()?'heute':
+  d.toLocaleDateString('de-DE',{day:'numeric',month:'long'});return tag+' um '+d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
+function ablageZeichnen(){const a=S.ablage;if(!a)return;
+  const ziele=Object.keys(ABLAGE).filter(k=>a.angebot.includes(k)||(k==='drive'&&S.google.moeglich));
+  $('s-ablage').hidden=!ziele.length&&!a.ziel;
+  $('ablage-text').textContent=a.ziel?ABLAGE[a.ziel]+(a.zuletzt?', zuletzt '+wann(a.zuletzt):', die erste Kopie läuft'):'Nur auf deinem Server';
+  fehler('ablage-fehler',a.fehler);$('ablage-aus').hidden=!a.ziel;
+  const box=$('ablage-wahl');box.innerHTML='';
+  for(const k of ziele){const b=document.createElement('button'),fehlt=!a.angebot.includes(k);b.className='zeile';b.type='button';
+    b.innerHTML='<span class="kachel'+(k===a.ziel?' gruen':'')+'">'+ORDNER+'</span><span><b></b><small></small></span>';
+    b.querySelector('b').textContent=ABLAGE[k];
+    b.querySelector('small').textContent=k===a.ziel?'Aktiv, tippen zum neu Verbinden':fehlt?'Verbinde zuerst Google mit Mail, darin steckt Drive':'Tippen zum Verbinden';
+    b.onclick=()=>ablageWaehlen(k,fehlt);box.appendChild(b)}}
+function geraetZeigen(g){$('ablage-geraetecode').textContent=g.code;$('ablage-ms').dataset.url=g.url;$('ablage-geraet').hidden=false}
+function ablageBeobachten(){clearInterval(ablageZeit);ablageZeit=setInterval(async()=>{const s=await stand();if(!s||!s.ablage)return;
+  if(!s.ablage.geraet){clearInterval(ablageZeit);$('ablage-geraet').hidden=true;S.ablage=s.ablage;ablageZeichnen()}},2000)}
+async function ablageWaehlen(k,fehlt){if(fehlt)return oeffnen('google');
+  fehler('ablage-fehler','');$('ablage-dropbox').hidden=$('ablage-geraet').hidden=true;
+  const r=await post('ablage/verbinden',{ziel:k});if(r.ok===false)return fehler('ablage-fehler',r.fehler);
+  if(r.url&&k==='dropbox'){$('ablage-link').dataset.url=r.url;$('ablage-code').value='';return $('ablage-dropbox').hidden=false}
+  if(r.code){geraetZeigen(r);return ablageBeobachten()}
+  S.ablage=r.ablage;ablageZeichnen()}
+$('ablage-link').onclick=()=>oeffne($('ablage-link').dataset.url);
+$('ablage-ms').onclick=()=>oeffne($('ablage-ms').dataset.url);
+$('ablage-kopieren').onclick=async()=>{try{await navigator.clipboard.writeText($('ablage-geraetecode').textContent);$('ablage-kopieren').textContent='Kopiert'}catch(e){}};
+$('ablage-code').addEventListener('paste',()=>setTimeout(()=>{if($('ablage-code').value.trim().length>=20)$('ablage-senden').click()},60));
+$('ablage-senden').onclick=async()=>{const c=$('ablage-code').value.trim();if(!c)return;$('ablage-senden').disabled=true;
+  const r=await post('ablage/code',{code:c});$('ablage-senden').disabled=false;if(r.ok===false)return fehler('ablage-fehler',r.fehler);
+  $('ablage-dropbox').hidden=true;S.ablage=r.ablage;ablageZeichnen()};
+$('ablage-aus').onclick=async()=>{const r=await post('ablage/aus',{});if(r.ok===false)return fehler('ablage-fehler',r.fehler);
+  S.ablage=r.ablage;ablageZeichnen()};
+$('monatlich').onchange=async()=>{const r=await post('ablage/monatlich',{an:$('monatlich').checked});
+  if(r.ok===false){$('monatlich').checked=!$('monatlich').checked;fehler('daten-fehler',r.fehler)}};
+$('daten-jetzt').onclick=async()=>{const b=$('daten-jetzt');b.disabled=true;b.textContent='Einen Moment …';fehler('daten-fehler','');
+  const r=await post('daten/senden',{});b.disabled=false;b.textContent=r.ok===false?'Jetzt in den Chat schicken':'Liegt im Chat';
+  if(r.ok===false)fehler('daten-fehler',r.fehler)};
+(async()=>{
+  if(!t&&tg){try{const r=await fetch('einstellungen/sitzung',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({initData:tg.initData})});const j=await r.json();t=j.t||''}catch(e){}}
+  S=t?await stand():null;
+  if(!S){$('abgelaufen').textContent=EINSTELLUNGEN?'Öffne die Einstellungen in Telegram über den Knopf Einstellungen neben dem Eingabefeld.':
+    'Dieser Link ist abgelaufen. Schick deinem Bot /start, dann bekommst du einen neuen.';
+    $('abgelaufen').hidden=false;for(const k of STUFEN)$('s-'+k).hidden=true;document.querySelector('.fortschritt').hidden=true;return}
   $('person').value=S.person||'';$('assistent').value=S.assistent||'';$('konto').value=S.google.konto||'';
   if(S.google.dienste.length)document.querySelectorAll('[data-dienst]').forEach(x=>x.checked=S.google.dienste.includes(x.dataset.dienst));
   fragebogenFuellen();
   const sprung=new URLSearchParams(location.search).get('wo')||location.hash.slice(1);
+  if(S.eingerichtet){document.querySelector('.fortschritt').hidden=true;ablageZeichnen();$('s-daten').hidden=false;
+    $('monatlich').checked=!!(S.ablage&&S.ablage.monatlich);
+    if(S.ablage&&S.ablage.geraet){geraetZeigen(S.ablage.geraet);ablageBeobachten()}}
   if(STUFEN.includes(sprung)&&S.eingerichtet){oeffnen(sprung);return}
+  if(['ablage','daten'].includes(sprung)&&S.eingerichtet){zeichne();return $('s-'+sprung).scrollIntoView({block:'start'})}
+  if(S.eingerichtet){offen='';return zeichne()}
   weiter()})();
-</script>""".replace("__BOT__", json.dumps(bot or ""))
+</script>""".replace("__BOT__", json.dumps(bot or "")).replace("__ORDNER__", json.dumps(ICON["ordner"])) \
+        .replace("__EINSTELLUNGEN__", "true" if einstellungen else "false")
+    if einstellungen:
+        return seite(name, "Einstellungen", "Einstellungen",
+                     "Hier änderst du, welche KI antwortet, was dein Assistent sehen darf und wo deine Daten liegen.",
+                     inhalt, skript)
     return seite(name, "Einrichten", "Einrichten",
                  "Namen, KI, Kalender und ein paar Fragen, dann meldet sich dein Assistent in Telegram.", inhalt, skript)
 
@@ -651,7 +737,8 @@ stand();setInterval(stand,3000);
 class Pforte:
     """hooks: name(), bot(), link_gueltig(t), fertig(anbieter), google(query) -> bool, stand() -> dict,
     namen(person, assistent) -> fehler, google_start(konto, dienste) -> (url, fehler), google_aus(),
-    abschliessen() -> fehler, wa_link_gueltig(t), wa_stand() -> dict, wa_start() -> fehler"""
+    abschliessen() -> fehler, wa_link_gueltig(t), wa_stand() -> dict, wa_start() -> fehler,
+    sitzung(initData) -> t oder "", ablage(aktion, daten) -> (fehler, dict)"""
 
     def __init__(self, hooks):
         self.hooks, self.anmeldung, self.lock = hooks, None, threading.Lock()
@@ -700,6 +787,9 @@ def handler_fuer(pforte):
             name = h["name"]()
             if teile.path == "/oauth2callback":
                 return self.senden(200, ergebnisseite(name, h["bot"](), h["google"](teile.query)), "text/html")
+            if teile.path == "/einstellungen":   # feste Adresse für den Menüknopf, Zugang über Telegram (initData)
+                return self.senden(200, einrichtungsseite(name, h["bot"](), einstellungen=h["stand"]()["eingerichtet"]),
+                                   "text/html")
             if teile.path in ("/einrichten", "/anmelden"):
                 if not h["link_gueltig"](t):
                     return self.senden(403, seite(name, "Link abgelaufen", "Abgelaufen",
@@ -737,6 +827,9 @@ def handler_fuer(pforte):
                     return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen. Schick deinem Bot /whatsapp."})
                 f = h["wa_start"]()
                 return self.senden(200, {"ok": not f, "fehler": f})
+            if self.path == "/einstellungen/sitzung":
+                t = h["sitzung"](str(d.get("initData") or "")) if isinstance(d, dict) and "sitzung" in h else ""
+                return self.senden(200 if t else 403, {"ok": bool(t), "t": t})
             if not isinstance(d, dict) or not h["link_gueltig"](str(d.get("t") or "")):
                 return self.senden(403, {"ok": False, "stand": "fehler",
                                          "fehler": "Der Link ist abgelaufen. Schick deinem Bot /start."})
@@ -773,6 +866,9 @@ def handler_fuer(pforte):
             if self.path == "/einrichten/whatsapp" and "wa_onboarding" in h:
                 f = h["wa_onboarding"](d.get("an") is True)
                 return self.senden(200, {"ok": not f, "fehler": f})
+            if self.path.startswith(("/ablage/", "/daten/")) and "ablage" in h:
+                f, mehr = h["ablage"](self.path.split("/", 1)[1], d)
+                return self.senden(200, {"ok": not f, "fehler": f, **mehr})
             if self.path == "/einrichten/fertig":
                 f = h["abschliessen"]()
                 return self.senden(200, {"ok": not f, "fehler": f})
