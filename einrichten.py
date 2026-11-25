@@ -34,6 +34,22 @@ import kit
 KIT = os.path.dirname(os.path.abspath(__file__))
 VORLAGE = os.path.join(KIT, "vorlage")
 GOOGLE_CLIENT = os.environ.get("ASSISTENT_GOOGLE_CLIENT") or "/etc/pearl-kit/google-client.json"
+GOOGLE_PORT_SELBST = 8101   # eigener Server: eine Person, ein Google-Dienst
+
+
+def google_client_eigen():
+    """Google-App, die die Person selbst angelegt hat (eigener Server). Liegt bei ihren Daten, nur für sie lesbar."""
+    return os.path.join(kit.DATEN, "google", "client.json")
+
+
+def google_client():
+    """Die eigene Google-App der Person geht vor, sonst die der Box (Betreuer)."""
+    eigen = google_client_eigen()
+    return eigen if os.path.isfile(eigen) else GOOGLE_CLIENT
+
+
+def google_venv():
+    return os.path.isfile(os.path.join(KIT, ".venv-google", "bin", "workspace-mcp"))
 def block(name):
     return re.compile(rf"[ \t]*<!-- {name} -->[ \t]*\n?(.*?)[ \t]*<!-- /{name} -->[ \t]*\n?", re.S)
 
@@ -261,7 +277,7 @@ def technik(cfg):
             f"GOOGLE_OAUTH_REDIRECT_URI={rueckruf}",
             f"WORKSPACE_MCP_CREDENTIALS_DIR={daten}/zugang",
             f"WORKSPACE_ATTACHMENT_DIR={kit.HOME_DIR}/eingang/google",
-            f"GOOGLE_CLIENT_SECRET_PATH={GOOGLE_CLIENT}",
+            f"GOOGLE_CLIENT_SECRET_PATH={google_client()}",
             f'GOOGLE_RECHTE="{google_rechte(cfg)}"',
             "OAUTHLIB_INSECURE_TRANSPORT=1", ""]))
     schreibe(os.path.join(kit.INSTANZ, ".gitignore"), "home/eingang/\nhome/ausgang/\nhome/whatsapp/.sweep/\ngoogle.env\n*.tmp\n",
@@ -320,6 +336,11 @@ def main():
         cfg = kit.lies_config()
     except kit.ConfigFehler as e:
         sys.exit(str(e))
+    if x.nachziehen and cfg["web"]["adresse"] and not cfg["admin"]["name"] and not cfg["google"]["port"] \
+            and google_venv():   # eigener Server von vor dem Kit Kalender und Mail: Google-Dienst nachrüsten
+        kit.setze_config("google", "port", GOOGLE_PORT_SELBST)
+        cfg = kit.lies_config()
+        print(f"Google-Dienst nachgerüstet auf Port {GOOGLE_PORT_SELBST}, die Google-App legt die Person selbst an")
     technik(cfg)
     einladung = not cfg["person"]["name"]   # home/ entsteht erst nach der Einrichtung durch die Person
     if x.nachziehen:   # neue Fassung des Kits: unveränderte Vorlagen in home/ mitziehen

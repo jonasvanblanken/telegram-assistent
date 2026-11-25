@@ -855,11 +855,28 @@ class Einladung(Chat, unittest.TestCase):
         self.assertFalse(self.a.eingerichtet())
 
         FalscherServer.anfragen.clear()
+        # Eigener Server: erst die eigene Google-App der Person, dann das Konto
+        s = json.loads(self.holen(f"/einrichten/stand?t={t}")[1])
+        self.assertFalse(s["google"]["app"])
+        self.assertTrue(s["google"]["rueckruf"].endswith("/oauth2callback"))
+        self.assertIn("Google-App", self.senden("/einrichten/google", {"t": t, "konto": "mara@example.org",
+                                                                         "dienste": ["kalender"]})["fehler"])
+        self.assertEqual(self.senden("/einrichten/google-app", {"t": t, "id": "123", "schluessel": "kurz"})["ok"], False)
+        # Testwerte zusammengesetzt, damit kein Secret-Scanner sie für echte Zugangsdaten hält
+        cid = "1" * 12 + "-" + "test" * 4 + ".apps.googleusercontent.com"
+        self.assertEqual(self.senden("/einrichten/google-app", {"t": t, "id": cid,
+                                                                  "schluessel": "x" * 32})["ok"], True)
+        client = os.path.join(self.inst.env["ASSISTENT_DATEN"], "google", "client.json")
+        self.assertEqual(oct(os.stat(client).st_mode & 0o777), "0o600")
+        web = json.load(open(client))["web"]
+        self.assertEqual((web["client_id"], web["redirect_uris"]), (cid, [s["google"]["rueckruf"]]))
+        self.assertTrue(json.loads(self.holen(f"/einrichten/stand?t={t}")[1])["google"]["app"])
         self.assertEqual(self.senden("/einrichten/google", {"t": t, "konto": "kein-konto", "dienste": ["kalender"]})["ok"], False)
         r = self.senden("/einrichten/google", {"t": t, "konto": "Mara@Example.org", "dienste": ["kalender"]})
         self.assertTrue(r["ok"] and r["url"].startswith("https://accounts.google.com/"), r)
-        self.assertIn('GOOGLE_RECHTE="calendar:full tasks:manage"',
-                      open(os.path.join(self.inst.env["ASSISTENT_DIR"], "google.env")).read())
+        genv = open(os.path.join(self.inst.env["ASSISTENT_DIR"], "google.env")).read()
+        self.assertIn('GOOGLE_RECHTE="calendar:full tasks:manage"', genv)
+        self.assertIn(f"GOOGLE_CLIENT_SECRET_PATH={client}", genv)
         self.assertEqual(self.holen("/oauth2callback?state=abc&code=4/xyz")[0], 200)
         self.assertTrue(json.loads(self.holen(f"/einrichten/stand?t={t}")[1])["google"]["verbunden"])
         self.assertEqual(self.gesendet(warten=0.5), [])   # während der Einrichtung schweigt der Chat

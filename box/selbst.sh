@@ -46,7 +46,7 @@ PFORTE_DOMAIN=$DOMAIN
 WACHE_SELBST=a-$KURZ
 ENV
 chmod 600 /etc/pearl-kit/box.env
-OHNE_GOOGLE=1 bash "$KIT_QUELLE/box/einrichten.sh"
+bash "$KIT_QUELLE/box/einrichten.sh"   # mit Google-Dienst, die Google-App legt die Person selbst an
 
 SCHRITT="Sichere Verbindung"
 stand "⏳ 2/3 Der Server holt sich ein Zertifikat für die sichere Verbindung."

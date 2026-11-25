@@ -55,10 +55,11 @@ if [ ! -e "$H/assistent/config.toml" ] && [ -n "$DOMAIN" ]; then
   ARGS=(--web-adresse "https://$DOMAIN/$1" --web-port "$WPORT")
   [ -n "$SELBST" ] || ARGS+=(--admin "$BETREUER")
   if [ -n "${NEU_KITS:-}" ]; then ARGS+=(--kits "$NEU_KITS"); fi   # vorab im Browser gewählte Kits (box/selbst.sh)
-  if [ -r /etc/pearl-kit/google-client.json ]; then
+  if [ -r /etc/pearl-kit/google-client.json ] || { [ -n "$SELBST" ] && [ -x "$KIT/.venv-google/bin/workspace-mcp" ]; }; then
     PORT=$(frei 8101 8199)
     ARGS+=(--port "$PORT")
     echo "   Google-Dienst bekommt Port $PORT. Im Google-Cloud-Projekt muss https://$DOMAIN/$1/oauth2callback als Redirect-URI stehen."
+    [ -r /etc/pearl-kit/google-client.json ] || echo "   Die Google-App legt die Person auf der Einrichtungsseite selbst an."
   else
     echo "   Ohne /etc/pearl-kit/google-client.json bietet die Seite keinen Kalender und keine Mail an."
   fi
@@ -182,7 +183,7 @@ install -o "$U" -g "$U" -m 644 "$KIT/systemd/assistent.service" "$KIT/systemd/go
 systemctl start "user@$(id -u "$U").service"
 systemctl --user -M "$U@" daemon-reload
 if grep -q '^konto = ".\+"' "$H/assistent/config.toml"; then
-  [ -r /etc/pearl-kit/google-client.json ] || echo "   WARNUNG: /etc/pearl-kit/google-client.json fehlt, Google startet erst danach"
+  [ -r /etc/pearl-kit/google-client.json ] || [ -n "$SELBST" ] || echo "   WARNUNG: /etc/pearl-kit/google-client.json fehlt, Google startet erst danach"
   systemctl --user -M "$U@" enable --now google-mcp.service
   sleep 4
 fi

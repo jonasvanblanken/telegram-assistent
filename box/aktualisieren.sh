@@ -15,6 +15,11 @@ chown -R root:root "$KIT"; chmod -R go-w "$KIT"
 bash "$KIT/box/ki-programme.sh"
 install -m 644 "$KIT/systemd/pearl-kit-wache.service" "$KIT/systemd/pearl-kit-wache.timer" /etc/systemd/system/
 if [ -d /opt/assistent-quelle/.git ]; then   # eigener Server aus der Cloud-config: holt neue Fassungen selbst
+  if [ ! -x "$KIT/.venv-google/bin/workspace-mcp" ]; then   # Server von vor dem Kit Kalender und Mail
+    echo "== Google-Dienst (workspace-mcp) nachrüsten"
+    { python3 -m venv "$KIT/.venv-google" && "$KIT/.venv-google/bin/pip" install -q --upgrade pip \
+      && "$KIT/.venv-google/bin/pip" install -q "workspace-mcp==1.23.1"; } || echo "   Google-Dienst nicht installiert, nächster Versuch beim nächsten Update" >&2
+  fi
   install -m 644 "$KIT/systemd/assistent-aktualisieren.service" "$KIT/systemd/assistent-aktualisieren.timer" /etc/systemd/system/
   install -m 644 "$KIT/systemd/assistent-whatsapp.path" "$KIT/systemd/assistent-whatsapp.service" /etc/systemd/system/
   systemctl daemon-reload

@@ -9,6 +9,7 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /anmelden/code              {t, code}      gibt den Code der Person an das Login-Programm
   POST /anmelden/wechseln          {t, anbieter}  wechselt zu einer schon verbundenen KI, ohne neue Anmeldung
   POST /einrichten/google          {t, konto, dienste}  Google-Dienst mit den Schaltern starten, Anmeldelink zurück
+  POST /einrichten/google-app      {t, id, schluessel}  eigene Google-App der Person speichern (eigener Server)
   POST /einrichten/google-aus      {t}            ohne Google weiter
   POST /einrichten/fragebogen      {t, antworten} Kennenlern-Fragebogen speichern, die KI meldet sich danach
   POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
@@ -243,6 +244,10 @@ background:#fff;color:var(--vb-tinte)}
 input:focus{outline:none;border-color:var(--vb-blau)}
 .code{font-size:clamp(34px,10vw,48px);font-weight:800;letter-spacing:.06em;text-align:center;background:var(--vb-gruen-zart);
 color:var(--vb-gruen-tief);border-radius:20px;padding:18px;margin:0 0 14px;user-select:all}
+.code.klein{font-size:14px;font-weight:600;letter-spacing:0;text-align:left;word-break:break-all;padding:12px 14px;margin:10px 0 8px}
+ol.schritte{padding-left:22px;margin:14px 0 18px}
+ol.schritte li{margin-bottom:12px;color:var(--vb-grau)}
+ol.schritte a{color:var(--vb-blau);font-weight:600}
 .buehne{background:radial-gradient(120% 120% at 20% 0%,var(--vb-blau-hell),var(--vb-blau) 55%,var(--vb-blau-tief));color:#fff;
 border-radius:28px;padding:34px 26px;box-shadow:0 30px 60px -20px rgba(131,253,128,.45),var(--vb-schatten);position:relative;overflow:hidden}
 .buehne::after{content:"";position:absolute;width:260px;height:260px;right:-80px;top:-90px;border-radius:50%;
@@ -397,6 +402,23 @@ def einrichtungsseite(name, bot, einstellungen=False):
 </section>
 <section class="karte stufe" id="s-google">{kopf("google", "kalender", "Kalender und Mail")}
   <div class="inhalt">
+    <div id="google-app" hidden>
+      <p>Kalender und Mail laufen über eine kleine Google-App, die nur dir gehört. Du legst sie einmal in deinem Google-Konto an, das dauert zehn Minuten und geht am besten am Computer.</p>
+      <ol class="schritte">
+        <li><a href="https://console.cloud.google.com/projectcreate" data-extern>Projekt anlegen</a>, Name zum Beispiel „Assistent“.</li>
+        <li><a href="https://console.cloud.google.com/flows/enableapi?apiid=gmail.googleapis.com,calendar-json.googleapis.com,drive.googleapis.com,tasks.googleapis.com" data-extern>Gmail, Kalender, Drive und Tasks einschalten</a>, im eben angelegten Projekt.</li>
+        <li><a href="https://console.cloud.google.com/auth/overview" data-extern>Google Auth Platform</a> öffnen und auf „Get started“ tippen. App-Name „Assistent“, deine Adresse als Support-Mail. Bei Zielgruppe wählst du mit einem Firmenkonto „Intern“, mit einer Gmail-Adresse „Extern“.</li>
+        <li>Nur bei „Extern“: unter <a href="https://console.cloud.google.com/auth/audience" data-extern>Zielgruppe</a> auf „App veröffentlichen“ tippen. Sonst meldet Google dich nach sieben Tagen ab.</li>
+        <li><a href="https://console.cloud.google.com/auth/clients/create" data-extern>Client erstellen</a>: Anwendungstyp „Webanwendung“, unter „Autorisierte Weiterleitungs-URIs“ diese Adresse einfügen:
+          <div class="code klein" id="rueckruf"></div><button class="knopf leise" id="rueckruf-kopieren">Adresse kopieren</button></li>
+        <li>Nach „Erstellen“ zeigt Google Client-ID und Clientschlüssel. Kopier beide hierher.</li>
+      </ol>
+      <label>Client-ID<input id="google-id" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="…apps.googleusercontent.com"></label>
+      <label>Clientschlüssel<input id="google-schluessel" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="GOCSPX-…"></label>
+      <p class="fehler" id="google-app-fehler" hidden></p>
+      <button class="knopf" id="google-app-los">Google-App speichern</button>
+    </div>
+    <div id="google-konto-teil">
     {schalter}
     <label>Dein Google-Konto<input id="konto" type="email" autocomplete="email" inputmode="email" placeholder="name@gmail.com"></label>
     <p class="fehler" id="google-fehler" hidden></p>
@@ -405,6 +427,7 @@ def einrichtungsseite(name, bot, einstellungen=False):
       <p>Google warnt gleich, dass es die App nicht kennt, weil sie nur für dich läuft. Tipp dort auf Erweitert und Weiter.</p>
       <button class="knopf" id="google-link">Zu Google</button>
       <p><span class="warte"></span> Warte auf Google …</p>
+    </div>
     </div>
     <button class="knopf ohne" id="google-aus">Ohne Google weiter</button>
   </div>
@@ -488,6 +511,7 @@ function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
   const e=erledigt(),wa=!!(S.whatsapp&&S.whatsapp.moeglich&&hat('whatsapp')),go=!!(S.google.moeglich&&hat('kalender'));
   $('s-google').hidden=document.querySelector('[data-zu=google]').hidden=!go;
+  $('google-app').hidden=!!S.google.app;$('google-konto-teil').hidden=!S.google.app;$('rueckruf').textContent=S.google.rueckruf||'';
   $('s-whatsapp').hidden=document.querySelector('[data-zu=whatsapp]').hidden=!wa;
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
     google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
@@ -564,6 +588,12 @@ $('google-los').onclick=async()=>{
   clearInterval(googleZeit);googleZeit=setInterval(async()=>{const s=await stand();
     if(s&&s.google.verbunden){clearInterval(googleZeit);S=s;$('google-los').hidden=false;$('google-link-teil').hidden=true;weiter()}},2000)};
 $('google-link').onclick=()=>oeffne($('google-link').dataset.url);
+document.querySelectorAll('[data-extern]').forEach(a=>a.onclick=e=>{e.preventDefault();oeffne(a.href)});
+$('rueckruf-kopieren').onclick=async()=>{try{await navigator.clipboard.writeText($('rueckruf').textContent);$('rueckruf-kopieren').textContent='Kopiert'}catch(e){}};
+$('google-app-los').onclick=async()=>{$('google-app-los').disabled=true;
+  const r=await post('einrichten/google-app',{id:$('google-id').value.trim(),schluessel:$('google-schluessel').value.trim()});
+  $('google-app-los').disabled=false;if(r.ok===false)return fehler('google-app-fehler',r.fehler);fehler('google-app-fehler','');
+  S.google.app=true;zeichne()};
 $('google-aus').onclick=async()=>{await post('einrichten/google-aus',{});S.google.uebersprungen=true;weiter()};
 function chips(id,werte,mehrere,gewaehlt){const box=$(id);box.innerHTML='';for(const w of werte){const c=document.createElement('button');
   c.className='chip';c.type='button';c.textContent=w;c.setAttribute('aria-pressed',String(gewaehlt.includes(w)));
@@ -863,6 +893,9 @@ def handler_fuer(pforte):
             if self.path == "/einrichten/fragebogen-aus":
                 h["fragebogen_aus"]()
                 return self.senden(200, {"ok": True})
+            if self.path == "/einrichten/google-app" and "google_app" in h:
+                f = h["google_app"](str(d.get("id") or ""), str(d.get("schluessel") or ""))
+                return self.senden(200, {"ok": not f, "fehler": f})
             if self.path == "/einrichten/google-aus":
                 h["google_aus"]()
                 return self.senden(200, {"ok": True})

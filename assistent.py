@@ -442,6 +442,8 @@ def google_starten(konto, dienste):
     dienste = [d for d in kit.GOOGLE_DIENSTE if d in (dienste or [])]
     if not GOOGLE_PORT:
         return None, "Google ist auf dieser Box nicht eingerichtet."
+    if not google_app_da():
+        return None, "Leg zuerst deine Google-App an und trag Client-ID und Schlüssel ein."
     if not MAIL_MUSTER.fullmatch(konto):
         return None, "Das sieht nicht nach einer Google-Adresse aus."
     if not dienste:
@@ -473,6 +475,46 @@ def google_starten(konto, dienste):
             break
         time.sleep(1)
     return None, "Google antwortet gerade nicht. Versuch es in ein paar Minuten noch einmal."
+
+
+GOOGLE_ID_MUSTER = re.compile(r"[0-9]{6,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com")
+GOOGLE_SCHLUESSEL_MUSTER = re.compile(r"[A-Za-z0-9_-]{20,80}")
+
+
+def google_app_da():
+    return os.path.isfile(einrichten.google_client())
+
+
+def google_weiterleitung():
+    """Adresse, die die Person in ihrer Google-App als Weiterleitungs-URI einträgt."""
+    return f"{WEB}/oauth2callback" if WEB else ""
+
+
+def google_app_speichern(client_id, schluessel):
+    """Eigener Server: Die Person hat in ihrem Google-Konto eine App angelegt und gibt Client-ID und Schlüssel ein.
+    Rückgabe: Fehlertext oder ''."""
+    client_id, schluessel = (client_id or "").strip(), (schluessel or "").strip()
+    if not GOOGLE_PORT:
+        return "Google ist auf diesem Server nicht eingerichtet."
+    if not GOOGLE_ID_MUSTER.fullmatch(client_id):
+        return "Die Client-ID endet auf .apps.googleusercontent.com. Kopier sie noch einmal aus Google."
+    if not GOOGLE_SCHLUESSEL_MUSTER.fullmatch(schluessel):
+        return "Der Clientschlüssel sieht nicht richtig aus, er beginnt meist mit GOCSPX-."
+    pfad = einrichten.google_client_eigen()
+    os.makedirs(os.path.dirname(pfad), mode=0o700, exist_ok=True)
+    daten = {"web": {"client_id": client_id, "client_secret": schluessel,
+                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                     "token_uri": "https://oauth2.googleapis.com/token",
+                     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                     "redirect_uris": [google_weiterleitung()]}}
+    tmp = pfad + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+        json.dump(daten, f, indent=2)
+    os.replace(tmp, pfad)
+    update(google_verbunden=None)   # neue App, neue Anmeldung
+    einrichten.technik(kit.lies_config())
+    log("Eigene Google-App gespeichert")
+    return ""
 
 
 def google_ueberspringen():
@@ -669,7 +711,8 @@ def einrichtung_stand():
                            "hilfe": list(HILFE_WAHL), "ton": list(TON_WAHL)},
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
-                       "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))},
+                       "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen")),
+                       "app": google_app_da(), "rueckruf": google_weiterleitung()},
             "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"},
             "ablage": ablage_stand(), "kits": None if KITS is None else sorted(KITS)}
 
@@ -704,7 +747,7 @@ def pforte_starten():
         srv = pforte.starten(WEB_PORT, {
             "name": lambda: NAME or "Dein Assistent", "bot": bot_sicher, "link_gueltig": link_gueltig,
             "fertig": anmeldung_fertig, "google": google_web, "stand": einrichtung_stand, "namen": name_setzen,
-            "google_start": google_starten, "google_aus": google_ueberspringen, "abschliessen": abschliessen,
+            "google_start": google_starten, "google_aus": google_ueberspringen, "google_app": google_app_speichern, "abschliessen": abschliessen,
             "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
             "fragebogen_aus": fragebogen_ueberspringen, "sitzung": webapp_sitzung, "ablage": ablage_aktion, **({"wa_link_gueltig": wa_link_gueltig,
             "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding}
