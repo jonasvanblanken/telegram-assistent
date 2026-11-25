@@ -1,0 +1,6 @@
+# Google-Dienst: das oberste Paket mit festen Prüfsummen (pip --require-hashes --no-deps). Die Abhängigkeiten zieht
+# danach ein zweiter pip-Lauf ohne Prüfsummen nach, in den Grenzen, die workspace-mcp selbst setzt.
+# Neue Fassung: Prüfsummen von https://pypi.org/pypi/workspace-mcp/<version>/json (digests.sha256) eintragen.
+workspace-mcp==1.23.1 \
+    --hash=sha256:3b8cd23ae488c51ed9cd52b3375b97ae1bf39cbff04ed7f067056dcdbe5aaefb \
+    --hash=sha256:2b7085e91d359b35034d9235ae1bf5211907f4f27aa559c25a57409ec9ae9466

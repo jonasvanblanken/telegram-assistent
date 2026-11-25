@@ -13,7 +13,7 @@ import os
 import kit
 
 ANBIETER = {
-    "claude": {"name": "Claude", "abo": "Claude Pro oder Max",
+    "claude": {"name": "Claude", "abo": "Claude Pro, Max, Team oder Enterprise",
                "modell": "sonnet", "klein": "sonnet", "effort": "high"},
     "chatgpt": {"name": "ChatGPT", "abo": "ChatGPT Plus, Pro oder Business",
                 "modell": "standard", "klein": "standard", "effort": "medium"},
@@ -61,16 +61,18 @@ def toml_liste(werte):
     return "[" + ", ".join(json.dumps(w) for w in werte) + "]"
 
 
-def codex_config(home_dir, google_port, lou=""):
+def codex_config(home_dir, google_port, lou="", netz=False):
     """~/.local/share/assistent/codex/config.toml: Sandbox im Arbeitsordner, CLAUDE.md als Anweisung, Google.
-    lou: Adresse von Lou mit dem Zugang der Person, leer ohne Lou."""
+    lou: Adresse von Lou mit dem Zugang der Person, leer ohne Lou. netz: Netz in der Sandbox, nur für WhatsApp
+    (werkzeuge/whatsapp.py fragt den Connector auf 127.0.0.1). Google und Lou erreicht Codex selbst, nicht die
+    Sandbox. Ohne Netz kann ein eingeschleuster Befehl nichts nach draußen schicken."""
     out = ["# geschrieben von einrichten.py, nicht von Hand ändern",
            'approval_policy = "never"',
            'sandbox_mode = "workspace-write"',
            'project_doc_fallback_filenames = ["CLAUDE.md"]',
            "",
            "[sandbox_workspace_write]",
-           "network_access = true",
+           f"network_access = {'true' if netz else 'false'}",
            "",
            "[shell_environment_policy]",
            'inherit = "core"',

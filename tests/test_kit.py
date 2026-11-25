@@ -15,6 +15,7 @@ import re
 import socket
 import subprocess
 import sys
+import shutil
 import tempfile
 import threading
 import time
@@ -93,6 +94,11 @@ class FalscherServer(http.server.BaseHTTPRequestHandler):
             return self.mcp(roh)
         from urllib.parse import parse_qs
         daten = {k: v[0] for k, v in parse_qs(roh).items()}
+        if self.path == "/token":   # Token-Endpunkt von Google: Prüfung der eigenen Google-App
+            self.anfragen.append({"pfad": "/token", "daten": daten})
+            if daten.get("client_secret", "").startswith("falsch"):
+                return self.antworte(401, {"error": "invalid_client"})
+            return self.antworte(400, {"error": "invalid_grant"})
         methode = self.path.rsplit("/", 1)[-1]
         self.anfragen.append({"pfad": self.path, "methode": methode, "daten": daten})
         if methode == "getUpdates":
@@ -140,6 +146,7 @@ class Instanz:
     def laden(self, telegram_api):
         os.environ.update(self.env)
         os.environ["ASSISTENT_TELEGRAM_API"] = telegram_api
+        os.environ["ASSISTENT_GOOGLE_TOKEN"] = telegram_api + "/token"
         for m in ("kit", "ablage", "anbieter", "pforte", "einrichten", "assistent", "brain"):
             sys.modules.pop(m, None)
         return importlib.import_module("assistent")
@@ -196,8 +203,9 @@ class Vorlage(unittest.TestCase):
                     text = open(os.path.join(wurzel, d), encoding="utf-8").read()
                     self.assertNotIn("{{", text, d)
                     self.assertNotIn("<!--", text, d)
-                    if not google and d.endswith(".md"):
-                        self.assertNotIn("google", text.lower(), d)
+                    if not google and d.endswith(".md"):   # nur der Text der Vorlage, nicht die eingesetzten Pfade
+                        vorlage = text.replace(KIT, "").replace(inst.tmp.name, "")
+                        self.assertNotIn("google", vorlage.lower(), d)
             settings = json.load(open(f"{a}/settings.json"))
             self.assertTrue(settings["autoMemoryDirectory"].endswith("/home/gedaechtnis"))
             mcp = json.load(open(f"{a}/mcp.json"))
@@ -670,6 +678,86 @@ class Anmeldeseite(Chat, unittest.TestCase):
         self.assertEqual(rueck[0]["auth"], "Bearer " + "g" * 40)
         self.assertTrue(any("Google ist verbunden" in x for x in self.gesendet()))
 
+    def test_google_fehler_von_google(self):
+        """Google schickt ?error=… zurück: die Seite sagt warum, der Google-Dienst bekommt nichts."""
+        code, seite = self.holen("/oauth2callback?error=access_denied&state=abc")
+        self.assertEqual(code, 200)
+        self.assertIn("nicht veröffentlicht", seite)
+        self.assertFalse([x for x in FalscherServer.anfragen if x["pfad"].startswith("/oauth2callback")])
+        g = self.a.einrichtung_stand()["google"]
+        self.assertIn("nicht veröffentlicht", g["fehler"])
+        self.assertEqual(g["domain"], "example.de")
+        self.assertFalse(g["verbunden"])
+        import pforte
+        self.assertIn("(unbekannt_xy)", pforte.google_fehler("error=unbekannt_xy"))
+        self.assertEqual(pforte.google_fehler("code=4/abc&state=x"), "")
+        self.holen("/oauth2callback?state=abc&code=4/xyz&scope=email")   # klappt danach: Fehler weg
+        g = self.a.einrichtung_stand()["google"]
+        self.assertEqual((g["verbunden"], g["fehler"]), (True, ""))
+
+    def test_google_domain(self):
+        for web, domain in (("https://box.example.de/test", "example.de"), ("https://1-2-3-4.sslip.io/mara", "sslip.io"),
+                            ("https://assistent.mara.co.uk/x", "mara.co.uk"), ("https://1.2.3.4/x", ""), ("", "")):
+            self.a.WEB = web
+            self.assertEqual(self.a.google_domain(), domain, web)
+
+    def test_google_abgelaufen(self):
+        self.a.update(google_verbunden=time.time())
+        self.a.eingerichtet = lambda: True
+        gilt = []
+        self.a.ablage.google_anmeldung_gilt = lambda warten=10: (gilt.append(1), False)[1]
+        g = self.a.einrichtung_stand()["google"]
+        self.assertEqual((g["verbunden"], g["abgelaufen"]), (False, True))
+        self.a.einrichtung_stand()
+        self.assertEqual(len(gilt), 1)   # höchstens alle zehn Minuten
+
+    def test_server_ip(self):
+        """Erst die Adresse der Standardroute, dann Metadaten (Hetzner, dann DigitalOcean/IONOS), private nie."""
+        from unittest import mock
+        a = self.a
+
+        class Sock:
+            def __init__(self, ip):
+                self.ip = ip
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *x):
+                return False
+
+            def connect(self, ziel):
+                pass
+
+            def getsockname(self):
+                return (self.ip, 4711)
+
+        def antwort(text, ok=True):
+            return types.SimpleNamespace(ok=ok, text=text)
+
+        with mock.patch.object(a.socket, "socket", lambda *x: Sock("95.217.1.2")), \
+                mock.patch.object(a.requests, "get", side_effect=AssertionError("keine Metadaten nötig")):
+            self.assertEqual(a.server_ip(), "95.217.1.2")
+        privat = lambda *x: Sock("10.0.0.5")   # noqa: E731  hinter NAT: Metadaten fragen
+        with mock.patch.object(a.socket, "socket", privat), \
+                mock.patch.object(a.requests, "get", side_effect=[antwort("", ok=False), antwort("49.12.3.4\n")]) as g:
+            self.assertEqual(a.server_ip(), "49.12.3.4")
+            self.assertIn("/metadata/v1/interfaces/public/0/ipv4/address", g.call_args_list[1][0][0])
+        with mock.patch.object(a.socket, "socket", privat), \
+                mock.patch.object(a.requests, "get", side_effect=a.requests.ConnectTimeout()) as g:
+            self.assertEqual(a.server_ip(), "")
+            self.assertEqual(g.call_count, 1)   # kein Metadaten-Dienst: nicht weiter warten
+        with mock.patch.object(a.socket, "socket", privat), \
+                mock.patch.object(a.requests, "get", return_value=antwort("192.168.1.9")):
+            self.assertEqual(a.server_ip(), "")
+
+    def test_leise_nachricht(self):
+        self.a.sende_text("Nachts schiefgegangen", leise=True)
+        self.a.sende_knopf("Auch nachts", "Ablage", "https://box.example.de/test/einstellungen", leise=True)
+        self.a.sende_text("Tagsüber")
+        n = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"]
+        self.assertEqual([x.get("disable_notification") for x in n], ["true", "true", None])
+
     def test_google_anleitung_ohne_localhost(self):
         self.nachricht("/google")
         k = self.knoepfe()
@@ -716,9 +804,49 @@ class Anmeldeseite(Chat, unittest.TestCase):
         self.assertTrue(stand["eingerichtet"])
         self.assertEqual(stand["ablage"]["ziel"], "")
         # fremdes Konto, falscher Bot, veraltet, verändert: kein Zugang
-        for daten in (self.init_data(konto=999), self.init_data(token="9:zzz"), self.init_data(alter=2 * 86400),
+        for daten in (self.init_data(konto=999), self.init_data(token="9:zzz"), self.init_data(alter=2 * 3600),
                       self.init_data().replace("Mara", "Eva"), ""):
             self.assertEqual(self.senden("/einstellungen/sitzung", {"initData": daten}), {"ok": False, "t": ""})
+
+    def test_stand_nur_mit_link(self):
+        """Ohne gültigen Link nichts über die Person, nach einer neuen Anmeldung nur „fertig“."""
+        self.einrichten_fertig()
+        self.assertEqual(self.holen("/einrichten/stand")[0], 403)
+        self.assertEqual(self.holen("/einrichten/stand?t=falsch")[0], 403)
+
+        class Fertig:
+            def json(self):
+                return {"stand": "fertig", "url": "", "geraetecode": "ABCD-1234", "fehler": "", "anbieter": "claude"}
+
+            def beenden(self):
+                pass
+        self.pf.anmeldung = Fertig()
+        code, roh = self.holen("/einrichten/stand")
+        self.assertEqual((code, json.loads(roh)), (200, {"login": {"stand": "fertig", "anbieter": "claude"}}))
+        self.assertNotIn("Mara", roh)
+
+    def test_whatsapp_link_ueber_telegram(self):
+        """Der Link zur WhatsApp-Seite gilt eine Stunde, ein älterer Knopf holt über initData einen neuen."""
+        self.einrichten_fertig()
+        self.a.ADMIN = ""
+        self.a.wa_moeglich = lambda: True
+        url = self.a.wa_url()
+        t = url.split("t=", 1)[1]
+        self.assertTrue(self.a.wa_link_gueltig(t))
+        self.assertLessEqual(self.a.load()["wa_link"]["bis"], time.time() + 3600)
+        self.a.wa_link_beenden()
+        self.assertLessEqual(self.a.load()["wa_link"]["bis"], time.time() + 120)
+        self.assertEqual(self.a.wa_sitzung(self.init_data(alter=2 * 3600)), "")
+        self.assertEqual(self.a.wa_sitzung(self.init_data(konto=999)), "")
+        neu = self.a.wa_sitzung(self.init_data())
+        self.assertTrue(neu and neu != t and self.a.wa_link_gueltig(neu))
+
+    def test_kein_token_im_log(self):
+        self.a.TELEGRAM_API = f"http://127.0.0.1:{freier_port()}"   # niemand da
+        with self.assertRaises(self.a.requests.RequestException) as e:
+            self.a.telegram("getMe", timeout=1)
+        self.assertNotIn("123:abc", str(e.exception))
+        self.assertIn("<token>", str(e.exception))
 
     def test_menueknopf_beim_start(self):
         FalscherServer.anfragen.clear()
@@ -867,6 +995,11 @@ class Einladung(Chat, unittest.TestCase):
         self.assertEqual(self.senden("/einrichten/google-app", {"t": t, "id": "123", "schluessel": "kurz"})["ok"], False)
         # Testwerte zusammengesetzt, damit kein Secret-Scanner sie für echte Zugangsdaten hält
         cid = "1" * 12 + "-" + "test" * 4 + ".apps.googleusercontent.com"
+        self.a.GOOGLE_APP_PAUSE = 0
+        r = self.senden("/einrichten/google-app", {"t": t, "id": cid, "schluessel": "falsch" + "x" * 26})
+        self.assertEqual(r["ok"], False)
+        self.assertIn("kennt diese Client-ID", r["fehler"])
+        self.assertFalse(json.loads(self.holen(f"/einrichten/stand?t={t}")[1])["google"]["app"])
         self.assertEqual(self.senden("/einrichten/google-app", {"t": t, "id": cid,
                                                                   "schluessel": "x" * 32})["ok"], True)
         client = os.path.join(self.inst.env["ASSISTENT_DATEN"], "google", "client.json")
@@ -1025,9 +1158,10 @@ class Einladung(Chat, unittest.TestCase):
         code, seite = self.holen(f"/einrichten?t={t}")
         self.assertEqual(code, 200)
         for teil in ("s-namen", "s-ki", "s-google", "telegram-web-app.js", "Ohne Google weiter", '"test_bot"',
-                     "s-lou", "Lou verbinden", "Ohne Lou weiter", "Ich habe eine Einladung", ">Einladung<",
-                     "s-brain", "In Google Drive teilen", "louVorab()"):
+                     "s-lou", "Lou verbinden", "Ohne Lou weiter",
+                     "s-brain", "In Google Drive teilen", "louVorab()", "domain-schritt", "google-hinweis"):
             self.assertIn(teil, seite)
+        self.assertNotIn("Ich habe eine Einladung", seite)   # Lou gibt jedem einen Zugang
         self.assertIn('data-anbieter="claude"', seite)
         self.assertNotIn('data-anbieter="gemini"', seite)   # Gemini CLI nimmt seit 18.06.2026 keine privaten Konten
 
@@ -1036,6 +1170,7 @@ class FalscheLou(http.server.BaseHTTPRequestHandler):
     """Spielt Lou: POST /api/zugang gibt einen Zugang aus, /mcp/<code> antwortet auf initialize, fremde Codes 401."""
     GUT = "testeinladung-0000"
     zugang = True       # False: Lou gibt gerade keinen Zugang aus
+    voll = False        # True: zu viele Zugänge von dieser IP (429)
     anfragen = []
 
     def log_message(self, *a):
@@ -1053,6 +1188,8 @@ class FalscheLou(http.server.BaseHTTPRequestHandler):
         roh = self.rfile.read(int(self.headers.get("content-length") or 0))
         FalscheLou.anfragen.append(self.path)
         if self.path == "/api/zugang":
+            if FalscheLou.voll:
+                return self.antworte(429, {"fehler": "Zu viele Anfragen"})
             if not FalscheLou.zugang:
                 return self.antworte(503, {"fehler": "gerade nicht"})
             basis = "http://" + self.headers.get("host", "")
@@ -1106,7 +1243,7 @@ class LouBasis(Chat):
         srv = server_starten(self.port)
         lou = http.server.ThreadingHTTPServer(("127.0.0.1", self.lou_port), FalscheLou)
         threading.Thread(target=lou.serve_forever, daemon=True).start()
-        FalscheLou.zugang, FalscheLou.anfragen[:] = True, []
+        FalscheLou.zugang, FalscheLou.voll, FalscheLou.anfragen[:] = True, False, []
         self.inst = Instanz(google=True, port=self.port, anbieter="", web_port=self.web, kits=self.kits,
                             einladung=self.einladung)
         self.inst.env["ASSISTENT_LOU_URL"] = self.lou = f"http://127.0.0.1:{self.lou_port}"
@@ -1246,6 +1383,37 @@ class LouUndBrain(LouBasis, unittest.TestCase):
         FalscherServer.anfragen.clear()
         self.nachricht("Lou einschalten")
         self.assertTrue(any("schon verbunden" in x for x in self.gesendet()))
+
+    def test_lou_neuer_code(self):
+        """Lou ist an, kennt den Code aber nicht mehr (401): Knopf und Nacht holen still einen neuen."""
+        self.einrichten_fertig()
+        self.assertTrue(self.senden("/einrichten/lou", {"t": self.token()})["ok"])
+        self.a.kit.setze_secret("LOU_CODE", "testeinladung-1111")   # Lou kennt ihn nicht
+        FalscherServer.anfragen.clear()
+        FalscheLou.anfragen[:] = []
+        self.nachricht("Lou einschalten")
+        ende = time.time() + 10
+        while time.time() < ende and not any("wieder verbunden" in x for x in self.gesendet(0)):
+            time.sleep(0.1)
+        self.assertTrue(any("wieder verbunden" in x for x in self.gesendet()))
+        self.assertEqual(FalscheLou.anfragen[:2], ["/mcp/testeinladung-1111", "/api/zugang"])
+        self.pruefe_lou(True)
+        # nachts: still, ohne Nachricht
+        self.a.kit.setze_secret("LOU_CODE", "testeinladung-2222")
+        FalscherServer.anfragen.clear()
+        self.a.lou_nachts()
+        self.pruefe_lou(True)
+        self.assertEqual(self.gesendet(warten=0.3), [])
+        FalscheLou.anfragen[:] = []
+        self.a.lou_nachts()   # gilt: kein neuer Zugang
+        self.assertEqual(FalscheLou.anfragen, [f"/mcp/{FalscheLou.GUT}"])
+
+    def test_lou_zu_viele_anfragen(self):
+        self.einrichten_fertig()
+        FalscheLou.voll = True
+        r = self.senden("/einrichten/lou", {"t": self.token()})
+        self.assertEqual((r["ok"], r["fehler"]), (False, self.a.LOU_VOLL))
+        self.pruefe_lou(False)
 
     def test_einstellungen_knoepfe(self):
         for bereich, text in (("lou", "Lou"), ("brain", "Brain")):
@@ -1427,6 +1595,110 @@ class EigenerServer(unittest.TestCase):
         self.assertIn("/bot1:tok/sendMessage", gesendet[0][0])
         self.assertIn(b"chat_id=777", gesendet[0][1])
 
+    def test_nochmal(self):
+        netz = os.path.join(KIT, "box", "netz.sh")
+        skript = ('. "$1"; z=$(mktemp); trap \'rm -f "$z"\' EXIT; '
+                  'zwei() { echo x >> "$z"; [ "$(wc -l < "$z")" -ge 2 ]; }; '
+                  'nochmal zwei || exit 7; nochmal false || echo "zweimal gescheitert"; nochmal true')
+        r = subprocess.run(["bash", "-euc", skript, "-", netz], capture_output=True, text=True,
+                           env={**os.environ, "NOCHMAL_PAUSE": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("zweimal gescheitert", r.stdout)
+        self.assertEqual(r.stderr.count("zweiter Versuch"), 2)
+
+    def test_installation_bricht_nicht_spaet_ab(self):
+        selbst = open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read()
+        # Updates und /whatsapp stehen, bevor person-anlegen.sh den Selbsttest macht
+        self.assertLess(selbst.index("enable --now assistent-aktualisieren.timer"), selbst.index("person-anlegen.sh \"$KURZ\""))
+        self.assertLess(selbst.index("enable --now assistent-whatsapp.path"), selbst.index("person-anlegen.sh \"$KURZ\""))
+        # ⚠️ nur, wenn der Assistent nicht läuft
+        schief = selbst[selbst.index("schief() {"):selbst.index("trap schief ERR")]
+        self.assertLess(schief.index("is-active"), schief.index('stand "⚠️'))
+        anlegen = open(os.path.join(KIT, "box", "person-anlegen.sh"), encoding="utf-8").read()
+        self.assertIn("for i in 1 2 3; do", anlegen)
+        self.assertIn('[ -n "$SELBST" ] && systemctl --user -M "$U@" is-active -q assistent.service', anlegen)
+        akt = open(os.path.join(KIT, "box", "aktualisieren.sh"), encoding="utf-8").read()
+        # neue Fassung erst daneben, Tausch erst nach den Downloads, bei Fehlern danach zurück
+        self.assertLess(akt.index('ki-programme.sh"'), akt.index('mv "$NEU" "$KIT"'))
+        self.assertLess(akt.index("trap zurueck ERR"), akt.index("\neinspielen\n"))
+
+    def test_anbieter_neutral_und_swap(self):
+        selbst = open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read()
+        self.assertIn("/hetzner/v1/metadata/public-ipv4", selbst)
+        self.assertIn("/metadata/v1/interfaces/public/0/ipv4/address", selbst)   # DigitalOcean
+        self.assertNotIn("Server bei Hetzner", selbst)
+        # Swap vor den Downloads, ein Fehler dort hält die Einrichtung nicht auf
+        self.assertIn("auslagerung || echo", selbst)
+        self.assertLess(selbst.index("auslagerung || echo"), selbst.index('bash "$KIT_QUELLE/box/einrichten.sh"'))
+        funktion = re.search(r"^oeffentlich\(\) \{.*?^\}\n", selbst, re.S | re.M).group(0)
+        r = subprocess.run(["bash", "-c", funktion + 'for a in "$@"; do oeffentlich "$a" && echo "$a"; done', "-",
+                            "49.12.3.4", "10.1.2.3", "172.16.0.1", "172.32.0.1", "192.168.0.9", "100.64.1.1", "127.0.0.1",
+                            "169.254.169.254", "1.2.3", "164.90.1.2"], capture_output=True, text=True)
+        self.assertEqual(r.stdout.split(), ["49.12.3.4", "172.32.0.1", "164.90.1.2"])
+
+    def test_release_signatur(self):
+        """Updates nur mit SSH-Signatur des Release-Schlüssels, geprüft gegen die installierte Kopie."""
+        signer = open(os.path.join(KIT, "box", "release-signers"), encoding="utf-8").read().split()
+        self.assertEqual(signer[:2], ["telegram-assistent", 'namespaces="git"'])
+        self.assertEqual(signer[3], "AAAAC3NzaC1lZDI1NTE5AAAAIJcwWQg20yCZc6uivFel+gkBF6AtF8JedBesAS5gNBZX")
+        sa = open(os.path.join(KIT, "box", "selbst-aktualisieren.sh"), encoding="utf-8").read()
+        self.assertIn("SIGNIERER=/etc/pearl-kit/release-signers", sa)
+        self.assertLess(sa.index('! signiert "$neu"'), sa.index('checkout -q "$neu"'))
+        # die Datei aus dem geholten Stand zählt erst nach dem Einspielen (Schlüsselwechsel)
+        self.assertGreater(sa.index('"$QUELLE/box/release-signers"'), sa.index('if bash "$QUELLE/box/aktualisieren.sh"'))
+        selbst = open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read()
+        self.assertIn('"$KIT_QUELLE/box/release-signers" /etc/pearl-kit/release-signers', selbst)
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen fehlt")
+        with tempfile.TemporaryDirectory() as t:
+            def git(*a, schluessel=None):
+                cfg = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "gpg.format=ssh", "-c", "commit.gpgsign=false"]
+                if schluessel:
+                    cfg += ["-c", f"user.signingkey={schluessel}"]
+                return subprocess.run(["git", *cfg, "-C", f"{t}/repo", *a], capture_output=True, text=True)
+            for k in ("release", "fremd"):
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", f"{t}/{k}"], check=True)
+            pub = open(f"{t}/release.pub").read().split()
+            with open(f"{t}/signers", "w") as f:   # Form wie box/release-signers, nur mit dem Testschlüssel
+                f.write(" ".join(signer[:2] + pub[:2]) + "\n")
+            subprocess.run(["git", "init", "-q", f"{t}/repo"], check=True)
+            pruefen = lambda: git("-c", f"gpg.ssh.allowedSignersFile={t}/signers", "verify-commit", "HEAD").returncode
+            self.assertEqual(git("commit", "-q", "--allow-empty", "-S", "-m", "a", schluessel=f"{t}/release").returncode, 0)
+            self.assertEqual(pruefen(), 0)
+            git("commit", "-q", "--allow-empty", "-S", "-m", "b", schluessel=f"{t}/fremd")
+            self.assertNotEqual(pruefen(), 0)
+            git("commit", "-q", "--allow-empty", "-m", "c")
+            self.assertNotEqual(pruefen(), 0)
+
+    def test_metadaten_sperre(self):
+        skript = open(os.path.join(KIT, "box", "metadaten-sperre.sh"), encoding="utf-8").read()
+        self.assertIn("! --uid-owner 0 -j REJECT", skript)
+        self.assertIn("-d 169.254.169.254/32", skript)
+        funktion = re.search(r"^einfuegen\(\) \{.*?^\}\n", skript, re.S | re.M).group(0)
+        regeln = "*filter\n:ufw-before-output - [0:0]\n-A ufw-before-output -o lo -j ACCEPT\n# ende\nCOMMIT\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".rules", delete=False) as f:
+            f.write(regeln)
+        self.addCleanup(os.unlink, f.name)
+        r = subprocess.run(["bash", "-c", funktion + 'einfuegen "$1" "# marke" "-A ufw-before-output REGEL"', "-", f.name],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.endswith("# ende\n# marke\n-A ufw-before-output REGEL\nCOMMIT\n"), r.stdout)
+        self.assertIn('bash "$KIT_QUELLE/box/metadaten-sperre.sh"',
+                      open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read())
+
+    def test_tests_ohne_root_und_feste_pakete(self):
+        akt = open(os.path.join(KIT, "box", "aktualisieren.sh"), encoding="utf-8").read()
+        self.assertIn("runuser -u nobody", akt)
+        self.assertNotIn('unittest discover -s "$QUELLE/tests"', akt)
+        anf = open(os.path.join(KIT, "box", "workspace-mcp.txt"), encoding="utf-8").read()
+        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", anf)), 2)
+        netz = open(os.path.join(KIT, "box", "netz.sh"), encoding="utf-8").read()
+        self.assertIn("--require-hashes --no-deps", netz)
+        for name in ("einrichten.sh", "aktualisieren.sh"):
+            text = open(os.path.join(KIT, "box", name), encoding="utf-8").read()
+            self.assertIn('workspace_mcp "$KIT/.venv-google" "$KIT/box/workspace-mcp.txt"', text, name)
+            self.assertNotIn('install -q --timeout 30 "workspace-mcp', text, name)
+
     def test_skripte_ohne_fragen(self):
         r = subprocess.run(["bash", "-n", os.path.join(KIT, "box", "selbst.sh")], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1437,7 +1709,79 @@ class EigenerServer(unittest.TestCase):
         self.assertIn('NEU_KITS="$AUSSTATTUNG"', open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read())
 
 
+class Abschottung(unittest.TestCase):
+    """Was eine eingeschleuste Anweisung nach draußen tragen könnte: WebFetch, /proc, Netz in Codex, Gäste."""
+
+    def test_settings_und_codex(self):
+        inst = Instanz(google=True)
+        self.addCleanup(inst.weg)
+        settings = json.load(open(os.path.join(inst.env["ASSISTENT_DIR"], "settings.json")))["permissions"]
+        self.assertNotIn("WebFetch", settings["allow"])
+        self.assertIn("WebFetch", settings["deny"])
+        self.assertIn("WebSearch", settings["allow"])
+        self.assertIn("Read(/proc/**)", settings["deny"])
+        import anbieter
+        self.assertIn("network_access = false", anbieter.codex_config("/h", 0))
+        self.assertIn("network_access = true", anbieter.codex_config("/h", 0, netz=True))
+
+    def test_keine_gaeste(self):
+        import asyncio
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("google_mcp_auth", os.path.join(KIT, "google", "google-mcp-auth.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        weiter = []
+
+        async def app(scope, receive, send):
+            weiter.append((await receive())["body"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        def aufruf(nachricht):
+            gesendet, teile = [], [json.dumps(nachricht).encode()[:20], json.dumps(nachricht).encode()[20:]]
+
+            async def receive():
+                return {"type": "http.request", "body": teile.pop(0), "more_body": bool(teile)}
+
+            async def send(m_):
+                gesendet.append(m_)
+            asyncio.run(m.OhneGaeste(app)({"type": "http", "method": "POST"}, receive, send))
+            return json.loads(gesendet[-1]["body"]) if gesendet[-1]["body"] != b"ok" else "weiter"
+
+        mit = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "manage_event", "arguments": {
+            "action": "create", "summary": "x", "attendees": ["fremd@example.org"]}}}
+        antwort = aufruf(mit)
+        self.assertEqual(antwort["id"], 7)
+        self.assertIn("Gäste", antwort["error"]["message"])
+        self.assertEqual(weiter, [])
+        ohne = {**mit, "params": {"name": "manage_event", "arguments": {"action": "create", "summary": "x"}}}
+        self.assertEqual(aufruf(ohne), "weiter")
+        self.assertEqual(json.loads(weiter[0]), ohne)   # unverändert weitergereicht
+
+
 class Wache(unittest.TestCase):
+    def test_gescheitertes_update(self):
+        import wache
+        with tempfile.TemporaryDirectory() as t:
+            alt = wache.GESCHEITERT
+            wache.GESCHEITERT = os.path.join(t, "aktualisieren-gescheitert")
+            try:
+                self.assertEqual(wache.aktualisierung(), [])                # nichts gescheitert
+                for zeile in ("abcdef1234", "abcdef1234 1", "abcdef1234 2"):  # alte Zeile ohne Zähler, Versuch 1 und 2
+                    open(wache.GESCHEITERT, "w").write(zeile + "\n")
+                    self.assertEqual(wache.aktualisierung(), [], zeile)
+                open(wache.GESCHEITERT, "w").write("abcdef1234 3\n")
+                b = wache.aktualisierung()
+                self.assertEqual([x["schluessel"] for x in b], ["aktualisierung"])
+                self.assertIn("abcdef1", b[0]["text"])
+                self.assertIn({"schluessel": "aktualisierung", "stufe": 1, "text": b[0]["text"]}, wache.box_befunde())
+                open(wache.GESCHEITERT, "w").write("abcdef1234 3 signatur\n")
+                b = wache.aktualisierung()
+                self.assertEqual(b[0]["stufe"], 2)
+                self.assertIn("nicht mit dem Release-Schlüssel signiert", b[0]["text"])
+            finally:
+                wache.GESCHEITERT = alt
+
     def test_entdoppeln_erinnern_entwarnen(self):
         import wache
         t = 1_000_000.0
@@ -1464,6 +1808,7 @@ class FalschesWhatsApp(http.server.BaseHTTPRequestHandler):
     chats = []
     nachrichten = {}
     gepaart = True
+    zustand = ""        # gesetzt: auth_state, den /api/status meldet
     aufrufe = []
 
     def log_message(self, *a):
@@ -1480,10 +1825,14 @@ class FalschesWhatsApp(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/auth/qr"):
             return self.senden({"qr_code": f"2@code-{int(time.time() // 2)}"})
-        self.senden({"auth_state": "paired" if self.gepaart else "unpaired"})
+        self.senden({"auth_state": self.zustand or ("paired" if self.gepaart else "unpaired")})
 
     def do_POST(self):
         n = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)))
+        if self.path == "/api/auth/pair-phone":
+            self.aufrufe.append(("pair-phone", n, None))
+            FalschesWhatsApp.zustand = "pairing_pending"
+            return self.senden({"pairing_code": "ABCD1234", "formatted": "ABCD-1234", "state": "pairing_pending"})
         name, args = n["params"]["name"], n["params"]["arguments"]
         self.aufrufe.append((name, args, self.headers.get("Authorization")))
         if name == "healthcheck":
@@ -1515,7 +1864,7 @@ class WhatsApp(Chat, unittest.TestCase):
     def setUp(self):
         FalscherServer.anfragen.clear()
         FalschesWhatsApp.aufrufe.clear()
-        FalschesWhatsApp.gepaart = True
+        FalschesWhatsApp.gepaart, FalschesWhatsApp.zustand = True, ""
         self.inst = Instanz(google=False, port=self.port)
         t = self.inst.tmp.name
         os.makedirs(f"{t}/wa")
@@ -1748,6 +2097,29 @@ class WhatsApp(Chat, unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.home, "jobs", "whatsapp-nacht.md")))
         self.assertIsNone(self.a.load().get("whatsapp"))
         self.assertFalse(self.a.wa_anbieten())   # verbunden: kein Angebot mehr
+
+    def test_telefonnummer_und_status(self):
+        """Koppeln mit Telefonnummer statt QR-Code, /whatsapp fragt die Bridge live."""
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.a.WEB, self.a.ADMIN = "https://box.example.de/test", ""   # eigener Server
+        self.assertIn("Ländervorwahl", self.a.wa_nummer("0170 1234567")[1])
+        self.assertIn("Ländervorwahl", self.a.wa_nummer("abc")[1])
+        self.assertEqual(self.a.wa_nummer("0049 (170) 123-4567"), ("ABCD-1234", ""))
+        self.assertEqual(FalschesWhatsApp.aufrufe[-1][1], {"phone_number": "+491701234567"})
+        self.assertEqual(self.a.wa_bridge_zustand(), "pairing_pending")
+        # /whatsapp: eingerichtet, die Bridge ist aber nicht mehr gekoppelt
+        self.a.kit.setze_config("whatsapp", "status", "an")
+        FalschesWhatsApp.zustand = "logged_out"
+        FalscherServer.anfragen.clear()
+        self.nachricht("/whatsapp")
+        n = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"][-1]
+        self.assertIn("nicht mehr", n["text"])
+        self.assertEqual(json.loads(n["reply_markup"])["keyboard"], [[{"text": self.a.WA_NEU}]])
+        # Fingerabdruck: neue Fassung der Bridge bestellt einmal einen Auftrag
+        self.assertTrue(self.a.wa_nachziehen())
+        self.assertEqual(open(self.a.WA_AUFTRAG).read().strip(), "an")
+        os.remove(self.a.WA_AUFTRAG)
+        self.assertFalse(self.a.wa_nachziehen())   # gleiche Fassung: nichts zu tun
 
     def test_haekchen_im_onboarding(self):
         web = freier_port()

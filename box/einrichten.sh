@@ -8,12 +8,15 @@ set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Bitte als root ausführen" >&2; exit 1; }
 QUELLE="$(cd "$(dirname "$0")/.." && pwd)"
 KIT=/opt/pearl-kit
+. "$(dirname "$0")/netz.sh"
 
 echo "== Pakete"
 export DEBIAN_FRONTEND=noninteractive
-APT=(apt-get -q -o DPkg::Lock::Timeout=600)   # beim ersten Start läuft oft noch das automatische Update
-"${APT[@]}" update
-"${APT[@]}" install -y python3 python3-requests python3-venv git zstd curl rsync ufw unattended-upgrades openssl qrencode \
+# Beim ersten Start läuft oft noch das automatische Update: bis zu zehn Minuten auf die Sperre warten. Ein hängender
+# Spiegel bricht nach 30 s ab, dann gibt es einen zweiten Versuch.
+APT=(apt-get -q -o DPkg::Lock::Timeout=600 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3)
+nochmal "${APT[@]}" update
+nochmal "${APT[@]}" install -y python3 python3-requests python3-venv git zstd curl rsync ufw unattended-upgrades openssl qrencode \
   xz-utils caddy
 python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 oder neuer nötig (tomllib)"'
 
@@ -34,8 +37,7 @@ if [ -z "${OHNE_GOOGLE:-}" ]; then
   if [ ! -x "$KIT/.venv-google/bin/python3" ]; then
     python3 -m venv "$KIT/.venv-google"
   fi
-  "$KIT/.venv-google/bin/pip" install -q --upgrade pip
-  "$KIT/.venv-google/bin/pip" install -q "workspace-mcp==1.23.1"
+  nochmal workspace_mcp "$KIT/.venv-google" "$KIT/box/workspace-mcp.txt"
 fi
 
 echo "== ChatGPT (Codex) und Gemini CLI"

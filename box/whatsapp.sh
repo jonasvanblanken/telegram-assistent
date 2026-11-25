@@ -17,7 +17,9 @@
 #   bash /opt/pearl-kit/box/whatsapp.sh aus          von Hand entfernen
 #
 # Bridge: adelaidasofia/whatsapp-mcp (MIT), Tag v0.4.1 mit den Patches aus whatsapp/patches/, als verknüpftes Gerät,
-# nur lesend. Bridge (8080) und Connector (8081) hören nur auf 127.0.0.1, kein nginx, keine Subdomain. Die
+# nur lesend. whatsmeow (das Protokoll) hebt das Skript auf WHATSMEOW_VERSION an, denn der Tag pinnt einen Stand vom
+# 21.08.2026 und WhatsApp ändert sein Protokoll laufend. Neuer Pin oder neue Patches: patch_stand ändert sich, der
+# Assistent bestellt nach dem Update von selbst einen Auftrag „an“, und die Bridge wird neu gebaut (die Kopplung bleibt). Bridge (8080) und Connector (8081) hören nur auf 127.0.0.1, kein nginx, keine Subdomain. Die
 # Nachrichtendatenbank ist mit SQLCipher verschlüsselt. Transkription bleibt aus.
 # Nur für den eigenen Server einer Person: Auf einer Box mit mehreren Personen könnte jeder Linux-User die Bridge
 # auf 127.0.0.1 lesen.
@@ -26,7 +28,16 @@ set -Eeuo pipefail
 
 KIT=${KIT:-/opt/pearl-kit}
 BRIDGE_VERSION=${BRIDGE_VERSION:-v0.4.1}
-GO_VERSION=${GO_VERSION:-1.27.0}
+BRIDGE_COMMIT=ba8e12332915565d80e90c838473361533c0f6c0   # v0.4.1; ein Tag lässt sich verschieben, ein Commit nicht
+GO_VERSION=1.27.0   # fest, die Prüfsummen unten gehören zu genau dieser Version
+# Prüfsummen von go.dev/dl und den Releases von astral-sh/uv, nachgerechnet am 25.11.2026. Neue Version: neue Summen.
+GO_SHA256_amd64=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685   # go1.27.0.linux-amd64
+GO_SHA256_arm64=51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda   # go1.27.0.linux-arm64
+UV_VERSION=0.13.7
+UV_SHA256_x86_64=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+UV_SHA256_aarch64=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc
+# Geprüft am 25.11.2026: baut mit den Patches, go test ./... grün (Go 1.27.0)
+WHATSMEOW_VERSION=${WHATSMEOW_VERSION:-v0.0.0-20261124172153-494ae5d707ac}
 REPO_URL=https://github.com/adelaidasofia/whatsapp-mcp.git
 APP_USER=whatsapp
 OPT_DIR=/opt/whatsapp-mcp
@@ -57,7 +68,7 @@ auth_state() {
 }
 
 patch_stand() {
-  echo "$BRIDGE_VERSION-$(cat "$KIT"/whatsapp/patches/* "$KIT"/whatsapp/server_http.py | sha256sum | cut -c1-12)"
+  echo "$BRIDGE_VERSION-$WHATSMEOW_VERSION-$(cat "$KIT"/whatsapp/patches/* "$KIT"/whatsapp/server_http.py | sha256sum | cut -c1-12)"
 }
 
 bauen() {
@@ -84,34 +95,50 @@ bauen() {
 
   if [ "$(cat "$OPT_DIR/stand" 2>/dev/null)" = "$(patch_stand)" ] \
       && [ -x "$OPT_DIR/bin/whatsapp-bridge" ] && [ -x "$OPT_DIR/app/whatsapp-mcp-server/.venv/bin/python" ]; then
-    echo "   Bridge $BRIDGE_VERSION ist schon gebaut"
+    echo "   Bridge $(patch_stand) ist schon gebaut"
   else
     SCHRITT="Quellcode"
     if [ -d "$OPT_DIR/app/.git" ]; then
       git -C "$OPT_DIR/app" fetch --tags --quiet
-      git -C "$OPT_DIR/app" checkout --quiet --force "$BRIDGE_VERSION"
+      git -C "$OPT_DIR/app" checkout --quiet --force "$BRIDGE_COMMIT"
       git -C "$OPT_DIR/app" clean -qfd whatsapp-bridge
     else
       git clone --quiet "$REPO_URL" "$OPT_DIR/app"
-      git -C "$OPT_DIR/app" checkout --quiet "$BRIDGE_VERSION"
+      git -C "$OPT_DIR/app" checkout --quiet "$BRIDGE_COMMIT"
     fi
+    [ "$(git -C "$OPT_DIR/app" rev-parse HEAD)" = "$BRIDGE_COMMIT" ] || { echo "Bridge nicht auf $BRIDGE_COMMIT" >&2; exit 1; }
 
     SCHRITT="Bridge bauen"
     tmp=$(mktemp -d)
     if [ "$(/opt/go/bin/go version 2>/dev/null | awk '{print $3}')" != "go$GO_VERSION" ]; then
       rm -rf /opt/go
       curl -fsSL "https://go.dev/dl/go$GO_VERSION.linux-$arch.tar.gz" -o "$tmp/go.tar.gz"
+      sum=GO_SHA256_$arch
+      [ -n "${!sum:-}" ] || { echo "Keine Prüfsumme für Go auf $arch" >&2; exit 1; }
+      echo "${!sum}  $tmp/go.tar.gz" | sha256sum -c --quiet -
       tar -C /opt -xzf "$tmp/go.tar.gz"
     fi
     bash "$KIT/whatsapp/patches/apply.sh" "$OPT_DIR/app"
     goenv=(GOROOT=/opt/go GOPATH="$tmp/gopath" GOCACHE="$tmp/gocache" GOFLAGS=-modcacherw)
+    SCHRITT="WhatsApp-Bibliothek"
+    ( cd "$OPT_DIR/app/whatsapp-bridge" && env "${goenv[@]}" /opt/go/bin/go get "go.mau.fi/whatsmeow@$WHATSMEOW_VERSION" >/dev/null \
+      && env "${goenv[@]}" /opt/go/bin/go mod tidy >/dev/null )
+    SCHRITT="Bridge bauen"
     ( cd "$OPT_DIR/app/whatsapp-bridge" && env "${goenv[@]}" /opt/go/bin/go test ./... >/dev/null )
     ( cd "$OPT_DIR/app/whatsapp-bridge" && env "${goenv[@]}" /opt/go/bin/go build -o "$tmp/whatsapp-bridge" . )
     install -m 0755 -o root -g root "$tmp/whatsapp-bridge" "$OPT_DIR/bin/whatsapp-bridge"
 
     SCHRITT="Connector"
     install -m 0644 "$KIT/whatsapp/server_http.py" "$OPT_DIR/app/whatsapp-mcp-server/server_http.py"
-    [ -x "$OPT_DIR/bin/uv" ] || curl -fsSL https://astral.sh/uv/install.sh | UV_INSTALL_DIR="$OPT_DIR/bin" sh >/dev/null
+    if [ "$("$OPT_DIR/bin/uv" --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]; then
+      m=$(uname -m)
+      sum=UV_SHA256_$m
+      [ -n "${!sum:-}" ] || { echo "Keine Prüfsumme für uv auf $m" >&2; exit 1; }
+      curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$m-unknown-linux-gnu.tar.gz" -o "$tmp/uv.tar.gz"
+      echo "${!sum}  $tmp/uv.tar.gz" | sha256sum -c --quiet -
+      tar -C "$tmp" -xzf "$tmp/uv.tar.gz"
+      install -m 0755 -o root -g root "$tmp/uv-$m-unknown-linux-gnu/uv" "$OPT_DIR/bin/uv"
+    fi
     ( cd "$OPT_DIR/app/whatsapp-mcp-server" && UV_CACHE_DIR="$DATA_DIR/uv-cache" "$OPT_DIR/bin/uv" sync --quiet )
     chown -R "$APP_USER:$APP_USER" "$OPT_DIR/app/whatsapp-mcp-server/.venv" "$DATA_DIR/uv-cache"
     rm -rf "$tmp"

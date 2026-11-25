@@ -24,6 +24,8 @@ KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOX_ENV = os.environ.get("WACHE_BOX_ENV", "/etc/pearl-kit/box.env")
 ZUSTAND = os.environ.get("WACHE_ZUSTAND", "/var/lib/pearl-kit/wache.json")
 ERINNERN = 12 * 3600
+GESCHEITERT = os.environ.get("WACHE_GESCHEITERT", "/var/lib/pearl-kit/aktualisieren-gescheitert")
+VERSUCHE = 3                    # wie in box/selbst-aktualisieren.sh
 LEISE = {"kontingent"}          # bekommt die Person selbst gesagt, der Admin muss nichts tun
 
 
@@ -76,8 +78,27 @@ def puls_von(u):
     return out
 
 
+def aktualisierung():
+    """Eigener Server: box/selbst-aktualisieren.sh schreibt „<fassung> <versuche> [signatur]“, sobald eine Fassung
+    scheitert. „signatur“: der Commit trägt keine gültige Signatur des Release-Schlüssels."""
+    try:
+        teile = open(GESCHEITERT, encoding="utf-8").read().split()
+    except OSError:
+        return []
+    if len(teile) < 2 or not teile[1].isdigit() or int(teile[1]) < VERSUCHE:
+        return []   # noch nicht ausgereizt, der nächste Lauf versucht es wieder
+    if "signatur" in teile[2:]:
+        return [{"schluessel": "aktualisierung", "stufe": 2,
+                 "text": f"die neue Fassung {teile[0][:7]} ist nicht mit dem Release-Schlüssel signiert und wurde nicht "
+                         "eingespielt. Dein Assistent läuft sicher mit der bisherigen weiter. Sag bitte dem Herausgeber "
+                         "des Assistenten Bescheid"}]
+    return [{"schluessel": "aktualisierung", "stufe": 1,
+             "text": f"die neue Fassung {teile[0][:7]} ließ sich {teile[1]}-mal nicht einspielen. Dein Assistent läuft "
+                     "mit der bisherigen weiter, die nächste Fassung versucht der Server von selbst"}]
+
+
 def box_befunde():
-    out = []
+    out = aktualisierung()
     du = shutil.disk_usage("/")
     if du.used / du.total > 0.9:
         out.append({"schluessel": "platte", "stufe": 2, "text": f"Platte zu {du.used / du.total:.0%} voll"})
@@ -132,7 +153,7 @@ def senden(env, text):
         token, chat = eigener_bot(env["WACHE_SELBST"])
         if chat in ("", "0"):
             return True   # noch niemand verbunden, niemand zum Benachrichtigen
-        text = "Technik-Hinweis von deinem Server. Hilft nichts von selbst, starte ihn in der Hetzner-Konsole neu.\n\n" + text
+        text = "Technik-Hinweis von deinem Server. Hilft nichts von selbst, starte ihn in der Konsole deines Server-Anbieters neu.\n\n" + text
     if not token or not chat:
         print("Wache: kein WACHE_TG_TOKEN/WACHE_CHAT_ID in box.env, nur Ausgabe:\n" + text)
         return True

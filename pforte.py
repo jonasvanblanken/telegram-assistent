@@ -14,7 +14,7 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /einrichten/fragebogen      {t, antworten} Kennenlern-Fragebogen speichern, die KI meldet sich danach
   POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
   POST /einrichten/whatsapp        {t, an}        WhatsApp dazu (der Server baut sofort) oder ohne
-  POST /einrichten/lou             {t, einladung} Lou verbinden: ohne Einladung holt der Server einen Zugang bei Lou
+  POST /einrichten/lou             {t}            Lou verbinden: der Server holt einen Zugang bei Lou (einladung: alter Weg)
   POST /einrichten/lou-aus         {t}            Lou aus (Schalter auf der Karte) oder ohne Lou weiter
 
 Lou kommt in der Einrichtung nur vor, wenn sie vorab angehakt ist: Die Seite verbindet Lou dann im Hintergrund und zeigt
@@ -26,6 +26,8 @@ den Schritt Lou nur, wenn das nicht klappt. In den Einstellungen ist Lou ein Sch
   GET  /whatsapp?t=<wa-link>       WhatsApp verbinden (eigener Link, gilt sieben Tage)
   GET  /whatsapp/stand?t=<wa-link> Schritt als JSON, beim QR-Code mit Bild
   POST /whatsapp/start             {t}  Einwilligung, der Server richtet die Bridge ein
+  POST /whatsapp/sitzung           {initData}  frischer Link für die WhatsApp-Seite aus einem älteren Knopf
+  POST /whatsapp/nummer            {t, nummer}  Kopplungscode für WhatsApp per Telefonnummer statt QR-Code
 
 Die Login-Programme laufen als die Person in einem Pseudo-Terminal, genau wie am Rechner: `claude setup-token`,
 `codex login --device-auth`, `gemini` mit NO_BROWSER=true. Die Seite liest daraus den Link (bei ChatGPT den
@@ -223,7 +225,7 @@ STIL = """
 --vb-gruen-tief:#0B5D2A;--vb-grund:#EFF2F6;--vb-karte:#fff;--vb-tinte:#0E1525;--vb-grau:#5B6577;--vb-linie:#DCE2EA;
 --vb-schatten:0 1px 2px rgba(14,21,37,.06),0 12px 32px rgba(14,21,37,.08);color-scheme:light}
 *{box-sizing:border-box}
-body{margin:0;background:var(--vb-grund);color:var(--vb-tinte);font:16px/1.5 "Schibsted Grotesk",system-ui,-apple-system,sans-serif;
+body{margin:0;background:var(--vb-grund);color:var(--vb-tinte);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 padding:0 16px 48px}
 .leiste{max-width:620px;margin:0 auto;padding:16px 0;display:flex;align-items:center;gap:12px;font-weight:600}
 .zeichen{width:38px;height:38px;border-radius:11px;background:#fff;box-shadow:var(--vb-schatten);display:grid;
@@ -252,9 +254,9 @@ input:focus{outline:none;border-color:var(--vb-blau)}
 .code{font-size:clamp(34px,10vw,48px);font-weight:800;letter-spacing:.06em;text-align:center;background:var(--vb-gruen-zart);
 color:var(--vb-gruen-tief);border-radius:20px;padding:18px;margin:0 0 14px;user-select:all}
 .code.klein{font-size:14px;font-weight:600;letter-spacing:0;text-align:left;word-break:break-all;padding:12px 14px;margin:10px 0 8px}
-ol.schritte{padding-left:22px;margin:14px 0 18px}
-ol.schritte li{margin-bottom:12px;color:var(--vb-grau)}
-ol.schritte a{color:var(--vb-blau);font-weight:600}
+.schritte{padding-left:22px;margin:14px 0 18px}
+.schritte li{margin-bottom:12px;color:var(--vb-grau)}
+.schritte a{color:var(--vb-blau);font-weight:600}
 .buehne{background:radial-gradient(120% 120% at 20% 0%,var(--vb-blau-hell),var(--vb-blau) 55%,var(--vb-blau-tief));color:#fff;
 border-radius:28px;padding:34px 26px;box-shadow:0 30px 60px -20px rgba(131,253,128,.45),var(--vb-schatten);position:relative;overflow:hidden}
 .buehne::after{content:"";position:absolute;width:260px;height:260px;right:-80px;top:-90px;border-radius:50%;
@@ -358,8 +360,6 @@ def seite(name, titel, h1, h2, inhalt, skript=""):
     return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex">
 <title>{e(titel)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>{STIL}</style></head><body>
 <div class="leiste"><span class="zeichen" id="zeichen">{e(name[:1].upper())}</span><span id="name">{e(name)}</span></div>
 <main><h1>{e(h1)}</h1><h2>{e(h2)}</h2>{inhalt}</main>{skript}</body></html>"""
@@ -423,7 +423,9 @@ def einrichtungsseite(name, bot, einstellungen=False):
         <li><a href="https://console.cloud.google.com/projectcreate" data-extern>Projekt anlegen</a>, Name zum Beispiel „Assistent“.</li>
         <li><a href="https://console.cloud.google.com/flows/enableapi?apiid=gmail.googleapis.com,calendar-json.googleapis.com,drive.googleapis.com,tasks.googleapis.com" data-extern>Gmail, Kalender, Drive und Tasks einschalten</a>, im eben angelegten Projekt.</li>
         <li><a href="https://console.cloud.google.com/auth/overview" data-extern>Google Auth Platform</a> öffnen und auf „Get started“ tippen. App-Name „Assistent“, deine Adresse als Support-Mail. Bei Zielgruppe wählst du mit einem Firmenkonto „Intern“, mit einer Gmail-Adresse „Extern“.</li>
-        <li>Nur bei „Extern“: unter <a href="https://console.cloud.google.com/auth/audience" data-extern>Zielgruppe</a> auf „App veröffentlichen“ tippen. Sonst meldet Google dich nach sieben Tagen ab.</li>
+        <li id="domain-schritt">Unter <a href="https://console.cloud.google.com/auth/branding" data-extern>Branding</a> bei „Autorisierte Domains“ diese Domain eintragen und speichern:
+          <div class="code klein" id="domain"></div></li>
+        <li>Nur bei „Extern“: unter <a href="https://console.cloud.google.com/auth/audience" data-extern>Zielgruppe</a> auf „App veröffentlichen“ tippen und bestätigen. Ohne das lässt Google dich gar nicht erst rein.</li>
         <li><a href="https://console.cloud.google.com/auth/clients/create" data-extern>Client erstellen</a>: Anwendungstyp „Webanwendung“, unter „Autorisierte Weiterleitungs-URIs“ diese Adresse einfügen:
           <div class="code klein" id="rueckruf"></div><button class="knopf leise" id="rueckruf-kopieren">Adresse kopieren</button></li>
         <li>Nach „Erstellen“ zeigt Google Client-ID und Clientschlüssel. Kopier beide hierher.</li>
@@ -439,9 +441,19 @@ def einrichtungsseite(name, bot, einstellungen=False):
     <p class="fehler" id="google-fehler" hidden></p>
     <button class="knopf" id="google-los">Mit Google verbinden</button>
     <div id="google-link-teil" hidden>
-      <p>Google warnt gleich, dass es die App nicht kennt, weil sie nur für dich läuft. Tipp dort auf Erweitert und Weiter.</p>
+      <p>Google warnt gleich, dass es die App nicht kennt, weil sie nur für dich läuft. Tipp auf „Erweitert“ und dann auf „Zu Assistent (unsicher) wechseln“.</p>
       <button class="knopf" id="google-link">Zu Google</button>
-      <p><span class="warte"></span> Warte auf Google …</p>
+      <p id="google-warte"><span class="warte"></span> Warte auf Google …</p>
+      <div id="google-hinweis" hidden>
+        <p>Von Google kommt noch nichts. Zeigt Google dir einen Fehler, liegt es meist an der Google-App:</p>
+        <ul class="schritte">
+          <li>„redirect_uri_mismatch“: Die Weiterleitungsadresse im Client weicht ab, sie muss genau stimmen.</li>
+          <li>„invalid_client“: Client-ID oder Clientschlüssel passen nicht zusammen.</li>
+          <li>„org_internal“: Die Zielgruppe steht auf „Intern“. Mit einer Gmail-Adresse braucht es „Extern“.</li>
+          <li>„access_denied“ oder „Zugriff blockiert“: Die App ist noch nicht veröffentlicht.</li>
+        </ul>
+        <button class="knopf leise" id="google-app-aendern">Google-App neu eintragen</button>
+      </div>
     </div>
     </div>
     <button class="knopf ohne" id="google-aus">Ohne Google weiter</button>
@@ -465,11 +477,8 @@ def einrichtungsseite(name, bot, einstellungen=False):
     du beginnst mit „Hallo Lou“.</p>
     <label class="schalter" id="lou-schalter" hidden><span class="kachel">{ICON["sprechblase"]}</span><span><b>Lou</b><small id="lou-schalter-text"></small></span>
       <input type="checkbox" id="lou-an"><i aria-hidden="true"></i></label>
-    <label id="lou-einladung-teil" hidden>Einladung<input id="lou-einladung" autocomplete="off" autocapitalize="off"
-      spellcheck="false" placeholder="Link oder Code"></label>
     <p class="fehler" id="lou-fehler" hidden></p>
     <button class="knopf" id="lou-los">Lou verbinden</button>
-    <button class="link" id="lou-einladung-auf" type="button">Ich habe eine Einladung</button>
     <button class="knopf ohne" id="lou-ohne">Ohne Lou weiter</button>
   </div>
 </section>
@@ -528,6 +537,9 @@ def einrichtungsseite(name, bot, einstellungen=False):
     <button class="knopf leise" id="daten-jetzt">Jetzt in den Chat schicken</button>
   </div>
 </section>
+<section class="karte stufe offen" id="s-support" hidden><header><span class="kachel">{ICON["sprechblase"]}</span><div><b>Support</b></div></header>
+  <div class="inhalt"><button class="knopf leise" id="support-schreiben">Support schreiben</button></div>
+</section>
 <section id="fertig" hidden><div class="buehne"><span class="kachel">{ICON["haken"]}</span><b id="fertig-titel">Fertig</b>
   <span id="fertig-text"></span><button class="knopf hell" id="zu-telegram">Zu Telegram</button></div></section>"""
     skript = """<script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -536,11 +548,21 @@ const BOT=__BOT__,ORDNER=__ORDNER__,EINSTELLUNGEN=__EINSTELLUNGEN__,tg=window.Te
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
 let t=new URLSearchParams(location.search).get('t');const $=id=>document.getElementById(id);
 const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','whatsapp','lou','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
-let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false,louGezeigt=false;
+let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false,louGezeigt=false,appNeu=false;
 async function stand(){try{const r=await fetch('einrichten/stand?t='+encodeURIComponent(t));return r.ok?r.json():null}catch(e){return null}}
 async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify(Object.assign({t},d))});return await r.json()}catch(e){return{ok:false,fehler:'Die Verbindung ist weg. Versuch es noch einmal.'}}}
 function oeffne(url){if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}
+// Support schreiben: WhatsApp an die Nummer aus der Anleitung, mit Stand, KI, Kits und letzter Meldung, nie mit Schlüsseln
+function supportZeigen(){const s=S.support||{};$('s-support').hidden=!s.whatsapp;if(!s.whatsapp)return;
+  $('support-schreiben').onclick=()=>{const kits=[],meldung=[];
+    if(S.whatsapp&&S.whatsapp.an)kits.push('Stay Close');if(S.brain&&S.brain.an)kits.push('Brain');
+    if(S.lou&&S.lou.an)kits.push('Lou');if(S.google&&S.google.verbunden)kits.push('Kalender und Mail');
+    for(const f of [S.lou&&S.lou.fehler,S.brain&&S.brain.fehler,S.ablage&&S.ablage.fehler])if(f)meldung.push(f);
+    const text='Hallo, ich brauche Hilfe mit meinem Assistenten.\n'+(S.eingerichtet?'Eingerichtet':'Noch in der Einrichtung')+
+      (s.fassung?', Stand '+s.fassung:'')+(S.anbieter?', KI '+S.anbieter:'')+', Kits: '+(kits.join(', ')||'keine')+'.'+
+      (meldung.length?'\nLetzte Meldung: '+meldung.join(' / '):'')+'\n\nMein Problem: ';
+    oeffne('https://wa.me/'+s.whatsapp+'?text='+encodeURIComponent(text))}}
 function fehler(id,text){$(id).textContent=text||'';$(id).hidden=!text}
 function hat(k){return S.eingerichtet||!S.kits||S.kits.includes(k)}   // vorab gewählte Kits, in den Einstellungen alle
 function erledigt(){return{namen:!!(S.person&&S.assistent),ki:!!S.anbieter,
@@ -552,11 +574,12 @@ function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
   const e=erledigt(),wa=!!(S.whatsapp&&S.whatsapp.moeglich&&hat('whatsapp')),go=!!(S.google.moeglich&&hat('kalender'));
   $('s-google').hidden=document.querySelector('[data-zu=google]').hidden=!go;
-  $('google-app').hidden=!!S.google.app;$('google-konto-teil').hidden=!S.google.app;$('rueckruf').textContent=S.google.rueckruf||'';
+  const app=!!S.google.app&&!appNeu;$('google-app').hidden=app;$('google-konto-teil').hidden=!app;$('rueckruf').textContent=S.google.rueckruf||'';
+  $('domain').textContent=S.google.domain||'';$('domain-schritt').hidden=!S.google.domain;
   $('s-whatsapp').hidden=document.querySelector('[data-zu=whatsapp]').hidden=!wa;
   $('s-lou').hidden=document.querySelector('[data-zu=lou]').hidden=!(S.lou&&(S.eingerichtet||louSchritt()));
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
-    google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
+    google:S.google.verbunden?S.google.konto:S.google.abgelaufen?'Abgelaufen, bitte neu verbinden':(S.google.uebersprungen?'Ohne Google':''),
     whatsapp:S.whatsapp&&(S.whatsapp.an?'Verbunden':S.whatsapp.wahl==='ja'?'Wird eingerichtet, der QR-Code kommt im Chat':
       S.whatsapp.wahl==='ohne'?'Ohne WhatsApp':'Später im Chat mit /whatsapp')||'',
     lou:S.lou&&(S.lou.an?'Verbunden':S.eingerichtet?'Aus':S.lou.wahl==='ohne'?'Ohne Lou':'')||'',
@@ -599,7 +622,7 @@ function login(s){
   if(s.stand==='fehler'||s.ok===false){clearInterval(zeit);zeit=null;$('fehler-text').textContent=s.fehler||'Das hat nicht geklappt.';return zeige('fehlschlag')}
   if(s.stand==='startet'||!s.url)return zeige('laedt');
   const n=NAMEN[s.anbieter]||'';$('link').dataset.url=s.url;
-  if(s.anbieter==='chatgpt'){$('link-text').textContent='Melde dich bei OpenAI mit deinem ChatGPT-Konto an und gib diesen Code ein. Danach geht es hier von selbst weiter.';
+  if(s.anbieter==='chatgpt'){$('link-text').textContent='Schalte vorher in ChatGPT unter Einstellungen bei Sicherheit die Anmeldung per Gerätecode für Codex ein. Dann melde dich bei OpenAI mit deinem ChatGPT-Konto an und gib diesen Code ein, danach geht es hier von selbst weiter.';
     $('geraetecode').textContent=s.geraetecode;$('geraetecode').hidden=$('kopieren').hidden=false;$('link').textContent='Zu OpenAI';
     $('pruefen-text').textContent='Warte auf OpenAI …';return zeige('link-teil','pruefen')}
   $('geraetecode').hidden=$('kopieren').hidden=true;$('link').textContent='Bei '+n+' anmelden';
@@ -633,15 +656,19 @@ $('google-los').onclick=async()=>{
   $('google-los').disabled=false;$('google-los').textContent='Mit Google verbinden';
   if(r.ok===false)return fehler('google-fehler',r.fehler);fehler('google-fehler','');
   $('google-link').dataset.url=r.url;$('google-los').hidden=true;$('google-link-teil').hidden=false;
-  clearInterval(googleZeit);googleZeit=setInterval(async()=>{const s=await stand();
-    if(s&&s.google.verbunden){clearInterval(googleZeit);S=s;$('google-los').hidden=false;$('google-link-teil').hidden=true;weiter()}},2000)};
+  $('google-warte').hidden=false;$('google-hinweis').hidden=true;const seit=Date.now();
+  clearInterval(googleZeit);googleZeit=setInterval(async()=>{const s=await stand();if(!s)return;
+    if(s.google.verbunden){clearInterval(googleZeit);S=s;$('google-los').hidden=false;$('google-link-teil').hidden=true;return weiter()}
+    if(s.google.fehler){clearInterval(googleZeit);$('google-los').hidden=false;$('google-link-teil').hidden=true;return fehler('google-fehler',s.google.fehler)}
+    if(Date.now()-seit>180000){$('google-warte').hidden=true;$('google-hinweis').hidden=false}},2000)};
+$('google-app-aendern').onclick=()=>{clearInterval(googleZeit);appNeu=true;$('google-los').hidden=false;$('google-link-teil').hidden=true;zeichne()};
 $('google-link').onclick=()=>oeffne($('google-link').dataset.url);
 document.querySelectorAll('[data-extern]').forEach(a=>a.onclick=e=>{e.preventDefault();oeffne(a.href)});
 $('rueckruf-kopieren').onclick=async()=>{try{await navigator.clipboard.writeText($('rueckruf').textContent);$('rueckruf-kopieren').textContent='Kopiert'}catch(e){}};
 $('google-app-los').onclick=async()=>{$('google-app-los').disabled=true;
   const r=await post('einrichten/google-app',{id:$('google-id').value.trim(),schluessel:$('google-schluessel').value.trim()});
   $('google-app-los').disabled=false;if(r.ok===false)return fehler('google-app-fehler',r.fehler);fehler('google-app-fehler','');
-  S.google.app=true;zeichne()};
+  S.google.app=true;appNeu=false;zeichne()};
 $('google-aus').onclick=async()=>{await post('einrichten/google-aus',{});S.google.uebersprungen=true;weiter()};
 function chips(id,werte,mehrere,gewaehlt){const box=$(id);box.innerHTML='';for(const w of werte){const c=document.createElement('button');
   c.className='chip';c.type='button';c.textContent=w;c.setAttribute('aria-pressed',String(gewaehlt.includes(w)));
@@ -654,20 +681,15 @@ async function whatsappWahl(an){const b=$(an?'whatsapp-ja':'whatsapp-ohne');b.di
   S.whatsapp=Object.assign(S.whatsapp||{},{wahl:an?'ja':'ohne'});weiter()}
 $('whatsapp-ja').onclick=()=>whatsappWahl(true);
 $('whatsapp-ohne').onclick=()=>whatsappWahl(false);
-function louZeichnen(){const l=S.lou||{},karte=!!S.eingerichtet,feld=!$('lou-einladung-teil').hidden&&!l.an;
+function louZeichnen(){const l=S.lou||{},karte=!!S.eingerichtet;
   $('lou-schalter').hidden=!karte;$('lou-an').checked=!!l.an;$('lou-schalter-text').textContent=l.an?'Verbunden, im Chat mit „Hallo Lou“':'Aus';
-  $('lou-einladung-teil').hidden=!feld;$('lou-einladung-auf').hidden=!!l.an||feld;
-  $('lou-los').hidden=!!l.an||(karte&&!feld);$('lou-ohne').hidden=karte||!!l.an;fehler('lou-fehler',l.an?'':l.fehler||'')}
-async function louVerbinden(){const b=$('lou-los'),einladung=$('lou-einladung-teil').hidden?'':$('lou-einladung').value.trim();
-  if(S.eingerichtet&&!einladung)return $('lou-einladung').focus();
+  $('lou-los').hidden=!!l.an||karte;$('lou-ohne').hidden=karte||!!l.an;fehler('lou-fehler',l.an?'':l.fehler||'')}
+async function louVerbinden(){const b=$('lou-los');
   b.disabled=true;b.textContent='Einen Moment …';fehler('lou-fehler','');
-  const r=await post('einrichten/lou',{einladung});b.disabled=false;b.textContent='Lou verbinden';
+  const r=await post('einrichten/lou',{});b.disabled=false;b.textContent='Lou verbinden';
   S.lou=Object.assign(S.lou||{},r.lou||{},r.ok===false?{fehler:r.fehler}:{});if(r.ok===false)return louZeichnen();
-  $('lou-einladung').value='';$('lou-einladung-teil').hidden=true;if(S.eingerichtet)zeichne();else weiter()}
+  if(S.eingerichtet)zeichne();else weiter()}
 $('lou-los').onclick=louVerbinden;
-$('lou-einladung-auf').onclick=()=>{$('lou-einladung-teil').hidden=false;louZeichnen();$('lou-einladung').focus()};
-$('lou-einladung').addEventListener('paste',()=>setTimeout(()=>{if($('lou-einladung').value.trim().length>=12&&!$('lou-los').disabled)louVerbinden()},60));
-$('lou-einladung').addEventListener('keydown',e=>{if(e.key==='Enter')louVerbinden()});
 $('lou-an').onchange=async()=>{const x=$('lou-an'),an=x.checked;x.disabled=true;fehler('lou-fehler','');
   $('lou-schalter-text').textContent='Einen Moment …';const r=await post(an?'einrichten/lou':'einrichten/lou-aus',{});x.disabled=false;
   S.lou=Object.assign(S.lou||{},r.lou||{},r.ok===false?{fehler:r.fehler}:{});zeichne()};
@@ -749,6 +771,7 @@ $('daten-jetzt').onclick=async()=>{const b=$('daten-jetzt');b.disabled=true;b.te
   if(S.eingerichtet){document.querySelector('.fortschritt').hidden=true;ablageZeichnen();$('s-daten').hidden=false;
     $('monatlich').checked=!!(S.ablage&&S.ablage.monatlich);
     if(S.ablage&&S.ablage.geraet){geraetZeigen(S.ablage.geraet);ablageBeobachten()}}
+  supportZeigen();
   if(['ablage','daten','lou','brain'].includes(sprung)&&S.eingerichtet){zeichne();return $('s-'+sprung).scrollIntoView({block:'start'})}
   if(STUFEN.includes(sprung)&&S.eingerichtet){oeffnen(sprung);return}
   if(S.eingerichtet){offen='';return zeichne()}
@@ -763,7 +786,30 @@ $('daten-jetzt').onclick=async()=>{const b=$('daten-jetzt');b.disabled=true;b.te
                  "Namen, KI, Kalender und ein paar Fragen, dann meldet sich dein Assistent in Telegram.", inhalt, skript)
 
 
-def ergebnisseite(name, bot, gut):
+def google_fehler(query):
+    """Fehler, mit dem Google zurückschickt (?error=…), als Satz für die Person. Ohne error: ''."""
+    fehler = (urllib.parse.parse_qs(query or "").get("error") or [""])[0]
+    if not fehler:
+        return ""
+    fehler = re.sub(r"[^a-z_]", "", fehler.lower())[:40]
+    return {
+        "access_denied": "Google hat den Zugriff nicht erlaubt. Hast du bei Google abgebrochen, versuch es einfach noch "
+                         "einmal. Sonst ist deine Google-App noch nicht veröffentlicht.",
+        "admin_policy_enforced": "Dein Google-Konto gehört zu einer Firma, die diese App nicht erlaubt. Das kann nur "
+                                 "die Person freigeben, die eure Konten verwaltet.",
+        "org_internal": "Deine Google-App steht auf „Intern“. Mit einer Gmail-Adresse braucht sie „Extern“.",
+        "redirect_uri_mismatch": "Die Weiterleitungsadresse in deiner Google-App stimmt nicht genau. Trag sie noch "
+                                 "einmal ein.",
+        "invalid_client": "Client-ID oder Clientschlüssel deiner Google-App passen nicht. Trag sie noch einmal ein.",
+        "unauthorized_client": "Deine Google-App lässt diese Anmeldung nicht zu. Leg den Client als „Webanwendung“ an.",
+        "invalid_scope": "Google kennt eine der Freigaben nicht. Schalte in deinem Projekt Gmail, Kalender, Drive und "
+                         "Tasks ein.",
+        "server_error": "Google hatte gerade ein Problem. Versuch es in ein paar Minuten noch einmal.",
+        "temporarily_unavailable": "Google hatte gerade ein Problem. Versuch es in ein paar Minuten noch einmal.",
+    }.get(fehler, f"Google hat die Anmeldung abgebrochen ({fehler or 'ohne Grund'}). Versuch es noch einmal.")
+
+
+def ergebnisseite(name, bot, gut, grund=""):
     zurueck = f'<a class="knopf hell" href="https://t.me/{html.escape(bot)}">Zurück zu Telegram</a>' if bot else ""
     if gut:
         inhalt = (f'<div class="buehne"><span class="kachel">{ICON["haken"]}</span><b>Verbunden</b>'
@@ -772,7 +818,7 @@ def ergebnisseite(name, bot, gut):
     inhalt = (f'<div class="karte"><div class="schritt"><span class="kachel">{ICON["kreuz"]}</span>'
               f'<p>Geh zurück zu Telegram und tipp noch einmal auf „Mit Google verbinden“.</p></div>'
               + (f'<a class="knopf" href="https://t.me/{html.escape(bot)}">Zurück zu Telegram</a>' if bot else "") + '</div>')
-    return seite(name, "Google", "Google", "Das hat nicht geklappt, der Link war vielleicht schon alt.", inhalt)
+    return seite(name, "Google", "Google", grund or "Das hat nicht geklappt, der Link war vielleicht schon alt.", inhalt)
 
 
 def whatsapp_seite(name, bot):
@@ -802,8 +848,19 @@ def whatsapp_seite(name, bot):
   <div class="schritt"><span class="kachel">2</span><p>iPhone: Einstellungen. Android: Menü ⋮ oben rechts. Dann
   „Verknüpfte Geräte“ und „Gerät hinzufügen“.</p></div>
   <div class="schritt"><span class="kachel">3</span><p>Halte das Handy auf diesen Code. Er erneuert sich von selbst.</p></div>
-  <p style="color:var(--vb-grau);font-size:15px;margin-bottom:0">Siehst du diese Seite gerade auf dem Handy? Dann öffne den Chat mit mir am Laptop und tipp dort auf
-  „QR-Code zeigen“.</p>
+  <p style="color:var(--vb-grau);font-size:15px">Hast du nur das Handy, verbindest du mit deiner Telefonnummer.</p>
+  <button class="knopf leise" id="nummer-auf">Mit Telefonnummer verbinden</button>
+  <div id="nummer-teil" hidden>
+    <label>Deine WhatsApp-Nummer<input id="nummer" type="tel" inputmode="tel" autocomplete="tel"
+     placeholder="+49 170 1234567" maxlength="24"></label>
+    <p class="fehler" id="nummer-fehler" hidden></p>
+    <button class="knopf" id="nummer-los">Code holen</button>
+    <div id="nummer-ergebnis" hidden>
+      <div class="code" id="nummer-code"></div>
+      <p>In WhatsApp unter „Verknüpfte Geräte“ auf „Gerät hinzufügen“ tippen, dann unten auf „Stattdessen mit
+      Telefonnummer verknüpfen“. Dort gibst du diesen Code ein.</p>
+    </div>
+  </div>
 </div></section>
 <section id="verknuepft" hidden><div class="karte"><div class="schritt"><span class="kachel gruen"><span class="warte"></span></span>
   <div><b>Verbunden</b><p>Gerade kommen deine Kontakte an, das dauert zwei, drei Minuten.</p></div></div></div></section>
@@ -817,13 +874,16 @@ def whatsapp_seite(name, bot):
 <script>
 const BOT=__BOT__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
-const T=new URLSearchParams(location.search).get('t')||'',$=id=>document.getElementById(id);
+let T=new URLSearchParams(location.search).get('t')||'',neu=false;const $=id=>document.getElementById(id);
 const TEILE=['frage','baut','qr','verknuepft','fertig','fehler'];
 let qr='';
 function zeige(s){TEILE.forEach(n=>$(n).hidden=n!==s)}
 async function stand(){
   try{const r=await fetch('whatsapp/stand?t='+encodeURIComponent(T),{cache:'no-store'});const d=await r.json();
-    if(!r.ok){$('fehler-text').textContent=d.fehler||'Der Link ist abgelaufen. Schick mir /whatsapp.';$('nochmal').hidden=true;
+    if(!r.ok){
+      if(tg&&!neu){neu=true;try{const s=await fetch('whatsapp/sitzung',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({initData:tg.initData})});const j=await s.json();if(j.t){T=j.t;return stand()}}catch(e){}}
+      $('fehler-text').textContent=d.fehler||'Der Link ist abgelaufen. Schick mir /whatsapp.';$('nochmal').hidden=true;
       return zeige('fehler')}
     if(d.schritt==='qr'&&d.qr&&d.qr!==qr){qr=d.qr;$('qr-bild').src=d.qr}
     if(d.schritt==='fehler'){$('fehler-text').textContent=d.fehler||'';$('nochmal').hidden=false}
@@ -838,6 +898,16 @@ async function starten(knopf){
   catch(e){$('start-fehler').textContent='Keine Verbindung zum Server. Versuch es gleich noch einmal.';$('start-fehler').hidden=false}
   knopf.disabled=false;
 }
+$('nummer-auf').onclick=()=>{$('nummer-teil').hidden=false;$('nummer-auf').hidden=true;$('nummer').focus()};
+$('nummer-los').onclick=async()=>{
+  const k=$('nummer-los');k.disabled=true;$('nummer-fehler').hidden=true;
+  try{const r=await fetch('whatsapp/nummer',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({t:T,nummer:$('nummer').value})});const d=await r.json();
+    if(d.ok){$('nummer-code').textContent=d.code;$('nummer-ergebnis').hidden=false}
+    else{$('nummer-fehler').textContent=d.fehler||'Das ging gerade nicht.';$('nummer-fehler').hidden=false}}
+  catch(e){$('nummer-fehler').textContent='Keine Verbindung zum Server. Versuch es gleich noch einmal.';$('nummer-fehler').hidden=false}
+  k.disabled=false;
+};
 $('start').onclick=()=>starten($('start'));
 $('nochmal').onclick=()=>starten($('nochmal'));
 $('zu-telegram').onclick=()=>{if(tg)tg.close();else if(BOT)location.href='https://t.me/'+BOT};
@@ -852,7 +922,7 @@ stand();setInterval(stand,3000);
 class Pforte:
     """hooks: name(), bot(), link_gueltig(t), fertig(anbieter), google(query) -> bool, stand() -> dict,
     namen(person, assistent) -> fehler, google_start(konto, dienste) -> (url, fehler), google_aus(),
-    abschliessen() -> fehler, wa_link_gueltig(t), wa_stand() -> dict, wa_start() -> fehler,
+    abschliessen() -> fehler, wa_link_gueltig(t), wa_stand() -> dict, wa_start() -> fehler, wa_nummer(n) -> (code, fehler),
     sitzung(initData) -> t oder "", ablage(aktion, daten) -> (fehler, dict)"""
 
     def __init__(self, hooks):
@@ -891,6 +961,7 @@ def handler_fuer(pforte):
             # In Telegram am Handy läuft die Seite als Web App ohne Rahmen, in Telegram Web in einem iframe
             self.send_header("content-security-policy", "frame-ancestors 'self' https://web.telegram.org")
             self.send_header("x-content-type-options", "nosniff")
+            self.send_header("strict-transport-security", "max-age=31536000")   # nur über HTTPS wirksam (Caddy)
             self.end_headers()
             self.wfile.write(daten)
 
@@ -901,7 +972,9 @@ def handler_fuer(pforte):
             t = (q.get("t") or [""])[0]
             name = h["name"]()
             if teile.path == "/oauth2callback":
-                return self.senden(200, ergebnisseite(name, h["bot"](), h["google"](teile.query)), "text/html")
+                gut = h["google"](teile.query)
+                return self.senden(200, ergebnisseite(name, h["bot"](), gut, "" if gut else google_fehler(teile.query)),
+                                   "text/html")
             if teile.path == "/einstellungen":   # feste Adresse für den Menüknopf, Zugang über Telegram (initData)
                 return self.senden(200, einrichtungsseite(name, h["bot"](), einstellungen=h["stand"]()["eingerichtet"]),
                                    "text/html")
@@ -913,7 +986,11 @@ def handler_fuer(pforte):
                 return self.senden(200, einrichtungsseite(name, h["bot"]()), "text/html")
             if teile.path in ("/einrichten/stand", "/anmelden/stand"):
                 login = pforte.anmeldung.json() if pforte.anmeldung else None
-                if not h["link_gueltig"](t) and not (login and login["stand"] == "fertig"):
+                if not h["link_gueltig"](t):
+                    # Nach einer neuen Anmeldung ist der Link verbraucht, die offene Seite braucht nur noch „fertig“.
+                    # Sonst nichts ohne gültigen Link: Namen, Google-Adresse, Antworten und Gerätecodes bleiben drin.
+                    if login and login["stand"] == "fertig":
+                        return self.senden(200, {"login": {"stand": "fertig", "anbieter": login.get("anbieter")}})
                     return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen."})
                 return self.senden(200, {**h["stand"](), "login": login})
             if teile.path == "/whatsapp" and "wa_stand" in h:
@@ -942,6 +1019,14 @@ def handler_fuer(pforte):
                     return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen. Schick deinem Bot /whatsapp."})
                 f = h["wa_start"]()
                 return self.senden(200, {"ok": not f, "fehler": f})
+            if self.path == "/whatsapp/sitzung" and "wa_sitzung" in h:
+                t = h["wa_sitzung"](str(d.get("initData") or "")) if isinstance(d, dict) else ""
+                return self.senden(200 if t else 403, {"ok": bool(t), "t": t})
+            if self.path == "/whatsapp/nummer" and "wa_nummer" in h:
+                if not isinstance(d, dict) or not h["wa_link_gueltig"](str(d.get("t") or "")):
+                    return self.senden(403, {"ok": False, "fehler": "Der Link ist abgelaufen. Schick deinem Bot /whatsapp."})
+                code, f = h["wa_nummer"](str(d.get("nummer") or "")[:40])
+                return self.senden(200, {"ok": bool(code), "code": code, "fehler": f})
             if self.path == "/einstellungen/sitzung":
                 t = h["sitzung"](str(d.get("initData") or "")) if isinstance(d, dict) and "sitzung" in h else ""
                 return self.senden(200 if t else 403, {"ok": bool(t), "t": t})

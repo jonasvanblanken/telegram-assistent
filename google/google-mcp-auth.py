@@ -7,6 +7,10 @@ ASGI-Prüfung, im selben Prozess, ohne neue Abhängigkeit und ohne zusätzlichen
 braucht "Authorization: Bearer <GOOGLE_MCP_TOKEN>", sonst 401. Das gilt auch für /oauth2callback: den
 Rückruf reicht assistent.py mit Header weiter.
 
+Zweite Schicht (OhneGaeste): Aufrufe mit Gästen (arguments.attendees) lehnt der Dienst ab. Google schickt Gästen
+sonst eine Einladung mit Titel und Beschreibung im Namen der Person, und eine eingeschleuste Anweisung könnte so
+Inhalte nach draußen tragen. workspace-mcp kennt dafür keinen Schalter, nur ganze Werkzeuge.
+
 Aufruf aus google-mcp.sh mit dem Python der venv von workspace-mcp:
   python3 google-mcp-auth.py <argumente für workspace-mcp>
 Token: GOOGLE_MCP_TOKEN in ~/.config/assistent/secrets.env (600). Fehlt er, startet der Dienst nicht.
@@ -58,6 +62,63 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
+GAESTE_FEHLER = ("Gäste einladen geht hier nicht, Google würde ihnen im Namen der Person schreiben. Leg den Termin "
+                 "ohne Gäste an, die Gäste trägt die Person in Google Kalender selbst ein.")
+
+
+def mit_gaesten(body):
+    """JSON-RPC-Nachricht(en) mit tools/call und nicht leeren attendees: Liste der ids, sonst []."""
+    try:
+        d = json.loads(body or b"null")
+    except ValueError:
+        return []
+    out = []
+    for n in d if isinstance(d, list) else [d]:
+        if not isinstance(n, dict) or n.get("method") != "tools/call":
+            continue
+        args = (n.get("params") or {}).get("arguments") or {}
+        if isinstance(args, dict) and args.get("attendees"):
+            out.append(n.get("id"))
+    return out
+
+
+class OhneGaeste:
+    """ASGI: liest den Körper jeder POST-Anfrage, lehnt tools/call mit Gästen ab und reicht den Rest unverändert weiter."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            return await self.app(scope, receive, send)
+        teile, mehr = [], True
+        while mehr:
+            m = await receive()
+            if m.get("type") != "http.request":
+                return
+            teile.append(m.get("body", b""))
+            mehr = m.get("more_body", False)
+        body = b"".join(teile)
+        ids = mit_gaesten(body)
+        if ids:
+            antwort = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32602, "message": GAESTE_FEHLER}} for i in ids]
+            daten = json.dumps(antwort[0] if len(antwort) == 1 else antwort, ensure_ascii=False).encode()
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"content-length", str(len(daten)).encode())]})
+            await send({"type": "http.response.body", "body": daten})
+            return
+        geliefert = False
+
+        async def nochmal():
+            nonlocal geliefert
+            if not geliefert:
+                geliefert = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+        await self.app(scope, nochmal, send)
+
+
 def main():
     tok = token()
     if len(tok) < 24:
@@ -70,6 +131,7 @@ def main():
 
     def http_app(self, *args, **kwargs):
         app = original(self, *args, **kwargs)
+        app.user_middleware.insert(0, Middleware(OhneGaeste))
         app.user_middleware.insert(0, Middleware(BearerAuth, token=tok))  # aeusserste Schicht
         app.middleware_stack = app.build_middleware_stack()
         return app

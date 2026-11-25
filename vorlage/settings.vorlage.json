@@ -7,7 +7,6 @@
       "Glob",
       "Grep",
       "WebSearch",
-      "WebFetch",
       "Edit({{HOME}}/**)",
       "Write({{HOME}}/**)",
       "Bash(python3 {{KIT}}/werkzeuge/*)",
@@ -15,6 +14,8 @@
       "mcp__lou"
     ],
     "deny": [
+      "WebFetch",
+      "Read(/proc/**)",
       "Read(~/.config/**)",
       "Read(~/.ssh/**)",
       "Read(~/.claude/.credentials.json)",

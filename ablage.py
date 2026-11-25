@@ -42,7 +42,6 @@ DROPBOX_TOKEN = "https://api.dropboxapi.com/oauth2/token"
 MS = "https://login.microsoftonline.com/common/oauth2/v2.0"
 MS_RECHTE = "Files.ReadWrite offline_access User.Read"
 GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
-GOOGLE_CLIENT = os.environ.get("ASSISTENT_GOOGLE_CLIENT") or "/etc/pearl-kit/google-client.json"
 _lock = threading.Lock()
 bei_verbunden = None   # setzt assistent.py: nach dem Verbinden einmal spiegeln und Bescheid geben
 
@@ -207,27 +206,60 @@ def trennen():
 
 # --- Zugang und Spiegel ------------------------------------------------------------------------------------------
 
-def _google_zugang():
-    """Drive über die Google-Anmeldung des Google-Dienstes (Datei des Dienstes, nur lesen)."""
+def _google_anmeldung():
+    """Anmeldung des Google-Dienstes (seine Datei, nur lesen): (daten, client_id, client_secret), ohne Datei None.
+    Fehlen Client-ID oder Schlüssel in der Datei, gelten die der Google-App, mit der der Dienst läuft: auf dem eigenen
+    Server die der Person, sonst die der Box (einrichten.google_client)."""
     pfade = sorted(glob.glob(os.path.join(kit.DATEN, "google", "zugang", "*.json")), key=os.path.getmtime)
     if not pfade:
-        raise AblageFehler("Verbinde zuerst Google unter Kalender und Mail.")
+        return None
     try:
-        z = json.load(open(pfade[-1], encoding="utf-8"))
+        with open(pfade[-1], encoding="utf-8") as f:
+            z = json.load(f)
     except (OSError, ValueError):
+        z = {}
+    if not isinstance(z, dict):
+        z = {}
+    cid, cgeheim = z.get("client_id"), z.get("client_secret")
+    if not cid:
+        import einrichten   # erst hier: einrichten zieht beim Anlegen brain.py und damit dieses Modul nach
+        c = json_lesen(einrichten.google_client())
+        c = (c.get("installed") or c.get("web") or {}) if isinstance(c, dict) else {}
+        cid, cgeheim = c.get("client_id"), c.get("client_secret")
+    return z, cid, cgeheim
+
+
+def google_anmeldung_gilt(warten=10):
+    """Gilt die Google-Anmeldung noch? Ein Refresh bei Google. True: ja, False: Google lehnt ab (invalid_grant, die
+    Person muss neu verbinden), None: unklar (keine Anmeldung, Google nicht erreicht)."""
+    a = _google_anmeldung()
+    if not a or not a[1] or not a[0].get("refresh_token"):
+        return None
+    z, cid, cgeheim = a
+    try:
+        r = requests.post(z.get("token_uri") or GOOGLE_TOKEN, timeout=warten,
+                          data={"client_id": cid, "client_secret": cgeheim or "", "refresh_token": z["refresh_token"],
+                                "grant_type": "refresh_token"})
+        d = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if r.ok and isinstance(d, dict) and d.get("access_token"):
+        return True
+    return False if isinstance(d, dict) and d.get("error") in ("invalid_grant", "unauthorized_client") else None
+
+
+def _google_zugang():
+    """Drive über die Google-Anmeldung des Google-Dienstes (Datei des Dienstes, nur lesen)."""
+    a = _google_anmeldung()
+    if not a:
+        raise AblageFehler("Verbinde zuerst Google unter Kalender und Mail.")
+    z, cid, cgeheim = a
+    if not z:
         raise AblageFehler("Die Google-Anmeldung ist nicht lesbar. Verbinde Google bitte neu.")
     rechte = " ".join(z.get("scopes") or [])
     if rechte and "auth/drive" not in rechte:
         raise AblageFehler("Google Drive ist nicht freigegeben. Schalte unter Kalender und Mail die Mail ein, "
                            "darin steckt Drive, und verbinde Google neu.")
-    cid, cgeheim = z.get("client_id"), z.get("client_secret")
-    if not cid:
-        try:
-            c = json.load(open(GOOGLE_CLIENT, encoding="utf-8"))
-            c = c.get("installed") or c.get("web") or {}
-            cid, cgeheim = c.get("client_id"), c.get("client_secret")
-        except (OSError, ValueError):
-            pass
     if not (cid and z.get("refresh_token")):
         raise AblageFehler("Die Google-Anmeldung ist unvollständig. Verbinde Google bitte neu.")
     r, d = _post(z.get("token_uri") or GOOGLE_TOKEN, {"client_id": cid, "client_secret": cgeheim or "",

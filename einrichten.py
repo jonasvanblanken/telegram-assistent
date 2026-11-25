@@ -81,6 +81,7 @@ def config_text(a):
         "google": {"konto": a.google or "", "port": a.port or 0, "dienste": "kalender,mail"},
         "web": {"adresse": (a.web_adresse or "").rstrip("/"), "port": a.web_port or 0},
         "kits": {"wahl": a.kits or ""},
+        "support": {"whatsapp": a.support or ""},
     }
     out = ["# Instanz des Assistenten (pearl-kit). Nach Änderungen: einrichten.py --nachziehen,",
            "# dann systemctl --user restart assistent google-mcp", ""]
@@ -278,7 +279,8 @@ def technik(cfg):
         mcp["mcpServers"]["lou"] = {"type": "http", "url": lou}
     schreibe(os.path.join(kit.INSTANZ, "mcp.json"), json.dumps(mcp, ensure_ascii=False, indent=2) + "\n")
     gport = cfg["google"]["port"] if google else 0
-    schreibe(os.path.join(anbieter.CODEX_HOME, "config.toml"), anbieter.codex_config(kit.HOME_DIR, gport, lou))
+    schreibe(os.path.join(anbieter.CODEX_HOME, "config.toml"), anbieter.codex_config(
+        kit.HOME_DIR, gport, lou, netz=(cfg.get("whatsapp") or {}).get("status") == "an"))
     schreibe(os.path.join(anbieter.GEMINI_HOME, ".gemini", "settings.json"),
              json.dumps(anbieter.gemini_settings(gport, lou), ensure_ascii=False, indent=2) + "\n")
     if google:
@@ -380,9 +382,13 @@ def main():
     a.add_argument("--whatsapp", choices=["an", "aus"], help="Erweiterung WhatsApp schalten (ruft werkzeuge/whatsapp.py)")
     a.add_argument("--lou", choices=["an", "aus"], help="Kit Lou schalten (verbinden geht in den Einstellungen, Karte Lou)")
     a.add_argument("--brain", choices=["an", "aus"], help="Kit Brain schalten (home/brain/)")
+    a.add_argument("--support", default="", help="WhatsApp-Nummer für den Knopf „Support schreiben“, nur Ziffern mit Ländervorwahl")
     a.add_argument("--kits", default="", help=f'vorab gewählte Kits, Komma-Liste aus {", ".join(kit.KITS)} oder "{kit.KITS_OHNE}"')
     a.add_argument("--neu-config", action="store_true", help="vorhandene config.toml überschreiben")
     x = a.parse_args()
+    if x.support and not re.fullmatch(r"[0-9]{8,15}", x.support):
+        print(f"--support {x.support!r} ist keine Nummer, der Knopf entfällt.")
+        x.support = ""
     if kit.kits_gewaehlt(x.kits) is False:   # die Einrichtung soll daran nicht scheitern: dann alles anbieten
         print(f"--kits {x.kits!r} unbekannt, erlaubt sind {', '.join(kit.KITS)} oder {kit.KITS_OHNE}. Biete alle Kits an.")
         x.kits = ""

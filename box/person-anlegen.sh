@@ -10,6 +10,7 @@ set -euo pipefail
 [ $# = 1 ] && [[ "$1" =~ ^[a-z][a-z0-9]{1,15}$ ]] || { echo "Aufruf: $0 <kurzname> (klein, nur a-z und 0-9)" >&2; exit 2; }
 KIT=/opt/pearl-kit
 KI_BIN=/opt/pearl-kit-ki/bin
+. "$(dirname "$0")/netz.sh"
 U="a-$1"
 H="/home/$U"
 DATEN="$H/.local/share/assistent"
@@ -40,7 +41,10 @@ loginctl enable-linger "$U"
 
 echo "== Claude Code für $U (ChatGPT und Gemini liegen fest in /opt/pearl-kit-ki)"
 if [ ! -x "$H/.local/bin/claude" ]; then
-  als bash -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
+  # Installer erst ganz laden (nur HTTPS), dann ausführen. Er prüft das Programm gegen die SHA-256 aus dem Manifest von
+  # Anthropic, für das Skript selbst gibt es keine Prüfsumme. Download endet nach zwei, Installation nach 15 Minuten.
+  nochmal als bash -c 'f=$(mktemp) && curl -fsSL --proto =https --tlsv1.2 --connect-timeout 20 -m 120 https://claude.ai/install.sh -o "$f" \
+    && timeout -k 30 900 bash "$f"; r=$?; rm -f "$f"; exit $r' >/dev/null
 fi
 als "$H/.local/bin/claude" --version
 [ -x "$KI_BIN/codex" ] && [ -x "$KI_BIN/gemini" ] || { echo "Codex oder Gemini fehlt, erst box/einrichten.sh laufen lassen" >&2; exit 1; }
@@ -54,7 +58,8 @@ if [ ! -e "$H/assistent/config.toml" ] && [ -n "$DOMAIN" ]; then
   WPORT=$(frei 8201 8299)
   ARGS=(--web-adresse "https://$DOMAIN/$1" --web-port "$WPORT")
   [ -n "$SELBST" ] || ARGS+=(--admin "$BETREUER")
-  if [ -n "${NEU_KITS:-}" ]; then ARGS+=(--kits "$NEU_KITS"); fi   # vorab im Browser gewählte Kits (box/selbst.sh)
+  if [ -n "${NEU_KITS:-}" ]; then ARGS+=(--kits "$NEU_KITS"); fi
+  if [ -n "${NEU_SUPPORT:-}" ]; then ARGS+=(--support "$NEU_SUPPORT"); fi   # Nummer für „Support schreiben“ (box/selbst.sh)   # vorab im Browser gewählte Kits (box/selbst.sh)
   if [ -r /etc/pearl-kit/google-client.json ] || { [ -n "$SELBST" ] && [ -x "$KIT/.venv-google/bin/workspace-mcp" ]; }; then
     PORT=$(frei 8101 8199)
     ARGS+=(--port "$PORT")
@@ -190,8 +195,21 @@ fi
 systemctl --user -M "$U@" enable --now assistent.service
 
 echo "== Selbsttest"
+# Dreimal mit Pausen: Gleich nach dem Start antwortet die Einrichtungsseite oft noch nicht, und ein einzelner
+# Aussetzer bei Telegram soll die Einrichtung nicht beenden.
 sleep 3
-if als python3 "$KIT/assistent.py" pruefen; then
+GRUEN=""
+for i in 1 2 3; do
+  if als python3 "$KIT/assistent.py" pruefen; then GRUEN=1; break; fi
+  [ "$i" = 3 ] || { echo "   Noch nicht alles bereit, nächster Versuch in 5 s"; sleep 5; }
+done
+if [ -z "$GRUEN" ] && [ -n "$SELBST" ] && systemctl --user -M "$U@" is-active -q assistent.service; then
+  # Eigener Server: Der Assistent läuft und hat sich in Telegram schon als fertig gemeldet. Was hier noch fehlt,
+  # meldet die Wache über den Bot, ein Abbruch ließe den Server ohne Updates zurück.
+  echo "   Selbsttest nicht ganz grün, der Assistent läuft aber. Weiter, den Rest meldet die Wache."
+  GRUEN=1
+fi
+if [ -n "$GRUEN" ]; then
   echo
   LINK=$(als python3 "$KIT/assistent.py" einladung 2>/dev/null | tail -1)
   if [ -n "$DOMAIN" ] && [[ "$LINK" == https://t.me/* ]]; then

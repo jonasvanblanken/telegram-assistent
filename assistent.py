@@ -36,6 +36,7 @@ import datetime
 import glob
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import queue
@@ -43,6 +44,7 @@ import re
 import secrets
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -199,18 +201,20 @@ def link_gueltig(t):
     return bool(t and a.get("t")) and hmac.compare_digest(str(t), a["t"]) and a.get("bis", 0) > time.time()
 
 
-def sende_knopf(text, knopf, url):
-    """Nachricht mit einem Knopf, der die Seite in Telegram öffnet (Web App). Geht das nicht, ein normaler Link."""
+def sende_knopf(text, knopf, url, leise=False):
+    """Nachricht mit einem Knopf, der die Seite in Telegram öffnet (Web App). Geht das nicht, ein normaler Link.
+    leise: ohne Ton (Meldungen aus der Nacht)."""
+    extra = {"disable_notification": "true"} if leise else {}
     for art in ("web_app", "url"):
         ziel = {"url": url} if art == "web_app" else url
         try:
-            return telegram("sendMessage", {"chat_id": PERSON_ID, "text": html(text), "parse_mode": "HTML",
+            return telegram("sendMessage", {"chat_id": PERSON_ID, "text": html(text), "parse_mode": "HTML", **extra,
                                             "reply_markup": {"inline_keyboard": [[{"text": knopf, art: ziel}]]}})
         except TelegramFehler as e:
             if e.code != 400:
                 raise
             log(f"Knopf als {art} abgelehnt ({e})")
-    sende_text(f"{text}\n\n{knopf}: {url}")
+    sende_text(f"{text}\n\n{knopf}: {url}", leise=leise)
 
 
 def einrichten_hinweis(immer=False, wo=""):
@@ -258,27 +262,39 @@ def menue_setzen():
         log(f"Menüknopf nicht gesetzt ({e})")
 
 
-def webapp_sitzung(init_data):
-    """Seite aus dem Menüknopf oder einem Web-App-Knopf: Telegram signiert initData mit dem Bot-Token
-    (core.telegram.org/bots/webapps, „Validating data received via the Mini App“). Stimmt die Signatur und gehört
-    das Konto der Person, bekommt die Seite einen Schlüssel wie aus dem Einrichtungslink."""
+INITDATA_GUELTIG = 3600   # so alt darf initData aus Telegram höchstens sein
+
+
+def von_der_person(init_data):
+    """Telegram signiert initData mit dem Bot-Token (core.telegram.org/bots/webapps, „Validating data received via
+    the Mini App“). True, wenn die Signatur stimmt, die Daten frisch sind und das Konto der Person gehört."""
     try:
         paare = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
     except ValueError:
-        return ""
+        return False
     pruef = paare.pop("hash", "")
     text = "\n".join(f"{k}={v}" for k, v in sorted(paare.items()))
     schluessel = hmac.new(b"WebAppData", (secret("TG_TOKEN") or "").encode(), hashlib.sha256).digest()
     if not pruef or not hmac.compare_digest(hmac.new(schluessel, text.encode(), hashlib.sha256).hexdigest(), pruef):
-        return ""
+        return False
     try:
         alter = time.time() - int(paare.get("auth_date") or 0)
         konto = int((json.loads(paare.get("user") or "{}") or {}).get("id") or 0)
     except (ValueError, TypeError, AttributeError):
-        return ""
-    if alter > 86400 or not PERSON_ID or konto != PERSON_ID:
-        return ""
-    return anmeldelink().split("t=", 1)[1]
+        return False
+    return bool(alter <= INITDATA_GUELTIG and PERSON_ID and konto == PERSON_ID)
+
+
+def webapp_sitzung(init_data):
+    """Seite aus dem Menüknopf oder einem Web-App-Knopf: kommt sie von der Person, bekommt sie einen Schlüssel wie aus
+    dem Einrichtungslink."""
+    return anmeldelink().split("t=", 1)[1] if von_der_person(init_data) else ""
+
+
+def wa_sitzung(init_data):
+    """WhatsApp-Seite aus einem älteren Knopf im Chat: der Link ist abgelaufen, Telegram belegt aber, dass die Person
+    sie öffnet. Dann gibt es einen frischen Link."""
+    return wa_url().split("t=", 1)[1] if von_der_person(init_data) and wa_moeglich() else ""
 
 
 # --- Ablage außerhalb des Servers (ablage.py) ------------------------------------------
@@ -368,8 +384,9 @@ def ablage_nachts(t):
             except ablage.AblageFehler as e:
                 ablage.setze(fehler=str(e))
                 log(f"Ablage: {e}")
-                if a.get("fehler") != str(e):
-                    sende_knopf(str(e), "Ablage", einstellungen_link("ablage")) if WEB else sende_text(str(e))
+                if a.get("fehler") != str(e):   # nachts ohne Ton, morgens liegt es oben im Chat
+                    sende_knopf(str(e), "Ablage", einstellungen_link("ablage"), leise=True) if WEB else \
+                        sende_text(str(e), leise=True)
         if kit_status("brain") == "an" and st.get("brain_gespiegelt") != t.date().isoformat():
             update(brain_gespiegelt=t.date().isoformat())
             brain_spiegeln(st.get("brain_fehler"))
@@ -392,6 +409,8 @@ def ablage_nachts(t):
 LOU_CODE_MUSTER = re.compile(r"(?:einrichten|mcp|k)/([A-Za-z0-9_-]{12,64})")   # wie codeAusEingabe in der Lou-App
 LOU_CODE_NACKT = re.compile(r"[A-Za-z0-9_-]{12,64}")
 LOU_WEG = "Lou ist gerade nicht erreichbar. Versuch es gleich noch einmal."
+LOU_VOLL = ("Von deinem Server kamen in der letzten Stunde zu viele Anfragen an Lou. Versuch es in einer Stunde "
+            "noch einmal.")   # Lou gibt je IP höchstens 20 Zugänge in der Stunde aus (HTTP 429)
 LOU_HALLO = "Lou ist auch da, schreib „Hallo Lou“, wenn du mit Lou reden magst."
 LOU_EIN = "Lou einschalten"   # Knopf im Chat, den die KI setzt, wenn Lou aus ist (CLAUDE.md, Werkzeuge)
 BRAIN_START = "Brain ist an. Sag mir, welches Thema ich als Erstes ablegen soll."
@@ -428,17 +447,17 @@ def lou_code_aus(eingabe):
 
 
 def lou_zugang_holen(warten=20):
-    """Neuen Zugang bei Lou holen (POST /api/zugang). Rückgabe: Code oder ''."""
+    """Neuen Zugang bei Lou holen (POST /api/zugang). Rückgabe: (code, fehler), genau eins davon leer."""
     try:
         r = requests.post(f"{kit.lou_url()}/api/zugang", json={}, timeout=warten, headers={"accept": "application/json"})
         code = str((r.json() or {}).get("code") or "") if r.status_code == 200 else ""
     except (requests.RequestException, ValueError, AttributeError) as e:
         log(f"Lou: kein Zugang geholt ({type(e).__name__})")
-        return ""
+        return "", LOU_WEG
     if not LOU_CODE_NACKT.fullmatch(code):
         log(f"Lou: kein Zugang geholt (HTTP {r.status_code})")
-        return ""
-    return code
+        return "", LOU_VOLL if r.status_code == 429 else LOU_WEG
+    return code, ""
 
 
 def lou_pruefen(code, warten=20):
@@ -471,8 +490,9 @@ def lou_verbinden(eingabe="", warten=20):
         f = {"unbekannt": "Diese Einladung kennt Lou nicht. Kopier den Link noch einmal.", "weg": LOU_WEG}.get(
             lou_pruefen(code, warten), "")
     else:
-        code = lou_zugang_holen(warten)
-        f = "" if code and lou_pruefen(code, warten) == "ok" else LOU_WEG
+        code, f = lou_zugang_holen(warten)
+        if not f and lou_pruefen(code, warten) != "ok":
+            f = LOU_WEG
     if f:
         update(lou_fehler=f)
         return f
@@ -505,17 +525,49 @@ def lou_aus():
     return ""
 
 
+def lou_erneuern(warten=20):
+    """Lou kennt den Code nicht mehr (401): einen neuen holen und eintragen, Lou bleibt an. Rückgabe: Fehlertext oder ''."""
+    code, f = lou_zugang_holen(warten)
+    if not f and lou_pruefen(code, warten) != "ok":
+        f = LOU_WEG
+    if f:
+        update(lou_fehler=f)
+        return f
+    kit.setze_secret("LOU_CODE", code)
+    einrichten.technik(kit.lies_config())   # mcp.json und die Einstellungen von Codex und Gemini mit dem neuen Code
+    update(lou_fehler=None)
+    log("Lou: neuer Zugang, der alte galt nicht mehr")
+    return ""
+
+
+def lou_nachts():
+    """Einmal je Nacht: kennt Lou den Code noch? Wenn nicht, still einen neuen holen, damit Lou morgens da ist."""
+    if kit_status("lou") != "an":
+        return
+    if lou_pruefen(secret("LOU_CODE") or "-") == "unbekannt":
+        f = lou_erneuern()
+        if f:
+            log(f"Lou: nachts keinen neuen Zugang bekommen ({f})")
+
+
 def lou_knopf(text):
-    """Knopf „Lou einschalten“ im Chat: Lou verbinden, ohne den Chat zu verlassen. Rückgabe: war es dieser Knopf?"""
+    """Knopf „Lou einschalten“ im Chat: Lou verbinden, ohne den Chat zu verlassen. Ist Lou schon an, fehlen der KI
+    aber die Werkzeuge, hilft oft ein neuer Code: erst prüfen, bei 401 still neu holen. Rückgabe: war es dieser Knopf?"""
     if text != LOU_EIN or not eingerichtet():
         return False
     notiere(PERSON, text)
-    if kit_status("lou") == "an":
-        sende_text("Lou ist schon verbunden. Schreib „Hallo Lou“, wenn du mit Lou reden magst.")
-        return True
+    hallo = "Schreib „Hallo Lou“, wenn du mit Lou reden magst."
 
     def verbinden():
-        f = lou_verbinden()
+        if kit_status("lou") == "an":
+            z = lou_pruefen(secret("LOU_CODE") or "-")
+            if z == "ok":
+                return sende_text("Lou ist schon verbunden. " + hallo)
+            f = lou_erneuern() if z == "unbekannt" else LOU_WEG
+            if not f:
+                return sende_text("Lou ist wieder verbunden. " + hallo)
+        else:
+            f = lou_verbinden()
         if f:
             sende_knopf(f, "Lou", einstellungen_link("lou")) if WEB else sende_text(f)
     threading.Thread(target=verbinden, daemon=True).start()   # nicht im Abruf von Telegram warten
@@ -591,7 +643,7 @@ def brain_spiegeln(fehler_vorher):
         log(f"Brain: {e}")
         if fehler_vorher != str(e):
             update(brain_fehler=str(e))
-            sende_knopf(str(e), "Brain", einstellungen_link("brain")) if WEB else sende_text(str(e))
+            sende_knopf(str(e), "Brain", einstellungen_link("brain"), leise=True) if WEB else sende_text(str(e), leise=True)
         return
     if fehler_vorher:
         update(brain_fehler=None)
@@ -678,7 +730,7 @@ def google_starten(konto, dienste):
     if r.returncode:
         log(f"Google-Dienst nicht gestartet: {(r.stderr or r.stdout).strip()[-300:]}")
         return None, "Der Google-Dienst startet gerade nicht. Versuch es in ein paar Minuten noch einmal."
-    update(google_verbunden=None)
+    update(google_verbunden=None, google_fehler=None)
     ende = time.time() + 40   # workspace-mcp braucht nach dem Start ein paar Sekunden
     while True:
         try:
@@ -697,6 +749,59 @@ def google_starten(konto, dienste):
 
 GOOGLE_ID_MUSTER = re.compile(r"[0-9]{6,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com")
 GOOGLE_SCHLUESSEL_MUSTER = re.compile(r"[A-Za-z0-9_-]{20,80}")
+
+
+GOOGLE_TOKEN_URL = os.environ.get("ASSISTENT_GOOGLE_TOKEN") or "https://oauth2.googleapis.com/token"
+GOOGLE_APP_PAUSE = 5
+GOOGLE_PRUEFEN = 600   # Einstellungen: so oft höchstens prüfen, ob die Google-Anmeldung noch gilt
+_google_geprueft = [0.0]
+
+
+def google_domain():
+    """Domain, die die Person in ihrer Google-App unter „Autorisierte Domains“ einträgt. sslip.io und nip.io stehen
+    nicht auf der Public Suffix List, Google will dort deshalb sslip.io (oder nip.io) selbst."""
+    host = (urllib.parse.urlparse(WEB).hostname or "") if WEB else ""
+    if not host or re.fullmatch(r"[0-9.]+|localhost", host):
+        return ""
+    teile = host.split(".")
+    n = 3 if len(teile) >= 3 and len(teile[-1]) == 2 and teile[-2] in ("co", "com", "org", "net", "ac", "or", "gv") else 2
+    return ".".join(teile[-n:])
+
+
+def google_app_pruefen(client_id, schluessel):
+    """Kurzer Aufruf am Token-Endpunkt mit einem erfundenen Code: invalid_client heißt, Client-ID oder Schlüssel
+    stimmen nicht, invalid_grant heißt, Google kennt die App. Rückgabe: Fehlertext oder '' (auch ohne Antwort)."""
+    for versuch in range(2):
+        try:
+            r = requests.post(GOOGLE_TOKEN_URL, timeout=10, data={
+                "client_id": client_id, "client_secret": schluessel, "code": "pruefen", "grant_type": "authorization_code",
+                "redirect_uri": google_weiterleitung()})
+            fehler = str((r.json() or {}).get("error") or "")
+        except (requests.RequestException, ValueError, AttributeError) as e:
+            log(f"Google-App nicht geprüft ({type(e).__name__})")
+            return ""
+        if fehler != "invalid_client":
+            return ""
+        if not versuch:
+            time.sleep(GOOGLE_APP_PAUSE)   # ein eben angelegter Client braucht bei Google manchmal einen Moment
+    log("Google-App: invalid_client")
+    return ("Google kennt diese Client-ID mit diesem Schlüssel nicht. Kopier beide noch einmal aus Google. Hast du den "
+            "Client gerade erst angelegt, warte eine Minute und versuch es dann noch einmal.")
+
+
+def google_pruefen(st):
+    """Einstellungen: Gilt die Google-Anmeldung noch? Höchstens alle zehn Minuten ein Refresh bei Google. Lehnt Google
+    ab (invalid_grant: widerrufen, Passwort geändert, sieben Tage im Testmodus), gilt Google als nicht mehr verbunden
+    und die Seite zeigt „neu verbinden“."""
+    if not (GOOGLE_PORT and st.get("google_verbunden") and eingerichtet()) \
+            or time.time() - _google_geprueft[0] < GOOGLE_PRUEFEN:
+        return st
+    _google_geprueft[0] = time.time()
+    if ablage.google_anmeldung_gilt(warten=8) is False:
+        log("Google-Anmeldung gilt nicht mehr (invalid_grant)")
+        update(google_verbunden=None, google_abgelaufen=time.time())
+        return load()
+    return st
 
 
 def google_app_da():
@@ -718,6 +823,9 @@ def google_app_speichern(client_id, schluessel):
         return "Die Client-ID endet auf .apps.googleusercontent.com. Kopier sie noch einmal aus Google."
     if not GOOGLE_SCHLUESSEL_MUSTER.fullmatch(schluessel):
         return "Der Clientschlüssel sieht nicht richtig aus, er beginnt meist mit GOCSPX-."
+    f = google_app_pruefen(client_id, schluessel)
+    if f:
+        return f
     pfad = einrichten.google_client_eigen()
     os.makedirs(os.path.dirname(pfad), mode=0o700, exist_ok=True)
     daten = {"web": {"client_id": client_id, "client_secret": schluessel,
@@ -935,8 +1043,27 @@ def ki_uebersicht():
     sende_knopf(text, "Weitere KI verbinden" if fehlt else "KI neu anmelden", url)
 
 
+_FASSUNG = []
+
+
+def kit_fassung():
+    """Kurzer Git-Stand des Kits für die Support-Nachricht, leer wenn keiner da ist."""
+    if not _FASSUNG:
+        stand = ""
+        for d in ("/opt/assistent-quelle", os.path.dirname(os.path.abspath(__file__))):
+            try:
+                r = subprocess.run(["git", "-C", d, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+            except Exception:   # noqa: BLE001  ohne git eben ohne Stand
+                continue
+            if r.returncode == 0 and r.stdout.strip():
+                stand = r.stdout.strip()
+                break
+        _FASSUNG.append(stand)
+    return _FASSUNG[0]
+
+
 def einrichtung_stand():
-    st = load()
+    st = google_pruefen(load())
     return {"person": PERSON, "assistent": NAME, "anbieter": KI_ANBIETER, "eingerichtet": eingerichtet(),
             "verbunden": verbundene(),
             "fragebogen": {"erledigt": bool(st.get("fragebogen") or st.get("fragebogen_uebersprungen")),
@@ -945,17 +1072,26 @@ def einrichtung_stand():
             "google": {"moeglich": bool(GOOGLE_PORT), "konto": GOOGLE_KONTO,
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen")),
-                       "app": google_app_da(), "rueckruf": google_weiterleitung()},
+                       "abgelaufen": bool(st.get("google_abgelaufen")) and not st.get("google_verbunden"),
+                       "fehler": st.get("google_fehler") or "",
+                       "app": google_app_da(), "rueckruf": google_weiterleitung(), "domain": google_domain()},
             "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"},
             "ablage": ablage_stand(), "kits": None if KITS is None else sorted(KITS),
             "lou": {"an": kit_status("lou") == "an" and bool(secret("LOU_CODE")), "wahl": st.get("lou_wahl") or "",
                     "fehler": st.get("lou_fehler") or ""},
-            "brain": brain_stand()}
+            "brain": brain_stand(),
+            "support": {"whatsapp": CFG["support"]["whatsapp"],
+                        "fassung": kit_fassung() if CFG["support"]["whatsapp"] else ""}}
 
 
 def google_web(query):
     """Rückweg von Google über die Seite: an den Google-Dienst der Instanz weitergeben. Rückgabe: ok?"""
     if not GOOGLE_PORT or not query:
+        return False
+    grund = pforte.google_fehler(query)
+    if grund:   # ?error=…: Google schickt die Person ohne Code zurück, die Seite zeigt den Satz und wartet nicht weiter
+        log(f"Google-Anmeldung abgelehnt: {(urllib.parse.parse_qs(query).get('error') or [''])[0][:40]}")
+        update(google_fehler=grund)
         return False
     try:
         r = requests.get(f"http://127.0.0.1:{GOOGLE_PORT}/oauth2callback?{query}", timeout=60,
@@ -966,7 +1102,8 @@ def google_web(query):
         ok = False
         log(f"Google-Anmeldung: Dienst nicht erreicht ({type(e).__name__})")
     if ok:
-        update(google_verbunden=time.time())
+        update(google_verbunden=time.time(), google_abgelaufen=None, google_fehler=None)
+        _google_geprueft[0] = time.time()
         if eingerichtet():
             notiere("System", "Google-Anmeldung erfolgreich")
             try:
@@ -987,7 +1124,8 @@ def pforte_starten():
             "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
             "fragebogen_aus": fragebogen_ueberspringen, "sitzung": webapp_sitzung, "ablage": ablage_aktion,
             "lou": lou_verbinden, "lou_aus": lou_aus, "brain_schalten": brain_schalten, "brain_teilen": brain_teilen, **({"wa_link_gueltig": wa_link_gueltig,
-            "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding}
+            "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding, "wa_nummer": wa_nummer,
+            "wa_sitzung": wa_sitzung}
                                                            if wa_moeglich() else {})})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
         return srv
@@ -1108,7 +1246,10 @@ def telegram(method, params=None, files=None, timeout=20):
     data = {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
             for k, v in (params or {}).items()}
     # Verbindungsaufbau kurz halten: haengt IPv6 zu Telegram, versucht urllib3 nach 5 s IPv4 statt nach der vollen Zeit (24.10.2026)
-    r = requests.post(url, data=data, files=files, timeout=(5, timeout))
+    try:
+        r = requests.post(url, data=data, files=files, timeout=(5, timeout))
+    except requests.RequestException as e:   # die Meldung enthält die URL mit dem Bot-Token, sie landet im Log
+        raise type(e)(str(e).replace(secret("TG_TOKEN") or "\0", "<token>")) from None
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if not r.ok:
         raise TelegramFehler(r.status_code, body.get("description", ""))
@@ -1156,13 +1297,13 @@ def stuecke(text, laenge=3500):
     return out + ([rest] if rest else [])
 
 
-def sende_text(text, chat=None, knoepfe=None):
+def sende_text(text, chat=None, knoepfe=None, leise=False):
     """knoepfe: Antworten zum Antippen (Telegram-Tastatur unter dem Chat), hängen an der letzten Nachricht.
-    Ein Tipp schickt den Text des Knopfs als normale Nachricht der Person."""
+    Ein Tipp schickt den Text des Knopfs als normale Nachricht der Person. leise: ohne Ton."""
     chat = chat or PERSON_ID
     teile = stuecke(text)
     for i, teil in enumerate(teile):
-        extra = {}
+        extra = {"disable_notification": "true"} if leise else {}
         if knoepfe and i == len(teile) - 1:
             extra["reply_markup"] = {"keyboard": [[{"text": k}] for k in knoepfe],
                                      "resize_keyboard": True, "one_time_keyboard": True}
@@ -2082,14 +2223,41 @@ def schlange_laden():
 
 # --- Dienst -------------------------------------------------------------------
 
-def server_ip():
-    """Öffentliche IPv4 des Servers aus den Hetzner-Metadaten, damit die Person sie ohne Hetzner-Konsole findet."""
+SERVER_IP_METADATEN = ("http://169.254.169.254/hetzner/v1/metadata/public-ipv4",                # Hetzner
+                       "http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address")  # DigitalOcean, IONOS
+
+
+def _oeffentlich(ip):
     try:
-        r = requests.get("http://169.254.169.254/hetzner/v1/metadata/public-ipv4", timeout=1)
-        ip = r.text.strip() if r.ok else ""
-        return ip if re.fullmatch(r"[0-9.]{7,15}", ip) else ""
-    except requests.RequestException:
+        a = ipaddress.ip_address(ip.strip())
+    except ValueError:
         return ""
+    return str(a) if a.version == 4 and a.is_global else ""
+
+
+def server_ip():
+    """Öffentliche IPv4 des Servers, damit die Person sie ohne Konsole ihres Anbieters findet. Zuerst die Adresse der
+    Schnittstelle mit der Standardroute (ein UDP-connect schickt nichts), dann die Metadaten der Anbieter. Antwortet dort
+    niemand, gleich "" (der Metadaten-Dienst ist für die Person oft gesperrt, /status soll nicht warten)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("1.1.1.1", 53))   # UDP: wählt nur die Route, schickt nichts
+            ip = _oeffentlich(s.getsockname()[0])
+        if ip:
+            return ip
+    except OSError:
+        pass
+    for url in SERVER_IP_METADATEN:
+        try:
+            r = requests.get(url, timeout=(0.5, 1))
+        except requests.ConnectionError:   # auch ConnectTimeout: kein Metadaten-Dienst, nicht weiter fragen
+            return ""
+        except requests.RequestException:
+            continue
+        ip = _oeffentlich(r.text) if r.ok else ""
+        if ip:
+            return ip
+    return ""
 
 
 # --- WhatsApp (Erweiterung, nur auf dem eigenen Server der Person) --------------
@@ -2107,8 +2275,9 @@ WA_MAX = 100 * 60                # länger begleitet der Bot eine Einrichtung ni
 WA_TAKT = float(os.environ.get("ASSISTENT_WA_TAKT", "3"))   # so oft schaut er auf den Stand des Servers
 _wa_faden = None
 
-WA_LINK_GUELTIG = 7 * 86400     # so lange gilt der Link zur WhatsApp-Seite
+WA_LINK_GUELTIG = 3600          # so lange gilt der Link zur WhatsApp-Seite, ältere Knöpfe holen über Telegram einen neuen
 WA_JA, WA_SPAETER, WA_NEIN = "WhatsApp verbinden", "Später", "Nein danke"
+WA_NEU = "WhatsApp neu verbinden"   # Knopf unter /whatsapp, wenn die Kopplung weg ist
 WA_ANGEBOT = (
     "Mir ist aufgefallen, dass dein WhatsApp noch nicht mit mir verbunden ist. Magst du das nachholen? Dann lese ich "
     "nachts deine Einzelchats mit und sage dir morgens, wem du noch antworten wolltest und was bei den Menschen los "
@@ -2135,7 +2304,8 @@ def wa_stand():
     """(stand, geändert um) aus WA_DIR/stand, ohne Datei ("", 0)."""
     pfad = os.path.join(WA_DIR, "stand")
     try:
-        return open(pfad, encoding="utf-8").read().strip(), os.path.getmtime(pfad)
+        with open(pfad, encoding="utf-8") as f:
+            return f.read().strip(), os.path.getmtime(pfad)
     except OSError:
         return "", 0
 
@@ -2156,6 +2326,64 @@ def wa_qr():
         return ""
 
 
+def wa_bridge_zustand():
+    """Live-Zustand der Bridge (auth_state aus /api/status): paired, qr_pending, pairing_pending, logged_out, …
+    oder "" ohne Antwort."""
+    try:
+        r = requests.get(f"{WA_API}/status", timeout=5)
+        return str((r.json() or {}).get("auth_state") or "") if r.ok else ""
+    except Exception:   # noqa: BLE001  Bridge aus oder kaputt: wie keine Antwort
+        return ""
+
+
+def wa_nummer(nummer):
+    """Koppeln mit Telefonnummer statt QR-Code (whatsmeow PairPhone über /api/auth/pair-phone), für alle, die nur ein
+    Handy haben. Rückgabe: (code, fehler)."""
+    ziffern = re.sub(r"[\s()./-]", "", str(nummer or ""))
+    if ziffern.startswith("00"):
+        ziffern = "+" + ziffern[2:]
+    if not re.fullmatch(r"\+[1-9][0-9]{6,14}", ziffern):
+        return "", "Bitte mit Ländervorwahl, zum Beispiel +49 170 1234567."
+    try:
+        r = requests.post(f"{WA_API}/auth/pair-phone", json={"phone_number": ziffern}, timeout=40)
+        d = r.json() if r.content else {}
+    except (requests.RequestException, ValueError) as e:
+        log(f"WhatsApp: Kopplungscode nicht geholt ({type(e).__name__})")
+        return "", "Der WhatsApp-Dienst antwortet gerade nicht. Versuch es gleich noch einmal."
+    code = str((d or {}).get("formatted") or (d or {}).get("pairing_code") or "") if r.ok else ""
+    if not code:
+        log(f"WhatsApp: Kopplungscode abgelehnt (HTTP {r.status_code}: {str((d or {}).get('details') or '')[:120]})")
+        return "", "Das ging gerade nicht. Lad die Seite neu und versuch es noch einmal."
+    return code, ""
+
+
+def wa_fingerabdruck():
+    """Stand von box/whatsapp.sh und den Patches. Ändert er sich mit einem Update, baut der Server die Bridge neu."""
+    h = hashlib.sha256()
+    for pfad in [os.path.join(HERE, "box", "whatsapp.sh"), os.path.join(HERE, "whatsapp", "server_http.py"),
+                 *sorted(glob.glob(os.path.join(HERE, "whatsapp", "patches", "*")))]:
+        try:
+            with open(pfad, "rb") as f:
+                h.update(f.read())
+        except OSError:
+            pass
+    return h.hexdigest()[:16]
+
+
+def wa_nachziehen():
+    """Zeitplan: Bringt ein Update eine neue Bridge (whatsmeow-Pin, Patches), bestellt der Assistent still einen
+    Auftrag „an“. box/whatsapp.sh baut dann nur, wenn sich wirklich etwas geändert hat, die Kopplung bleibt."""
+    if not wa_moeglich() or wa_status() != "an" or wa_laeuft() or os.path.exists(WA_AUFTRAG) or load().get("whatsapp"):
+        return False
+    stand = wa_fingerabdruck()
+    if load().get("wa_bau") == stand:
+        return False
+    update(wa_bau=stand)
+    wa_auftrag("an")
+    log("WhatsApp: neue Fassung der Bridge bestellt")
+    return True
+
+
 def wa_qr_bild(code):
     """QR-Code als data:-Adresse (SVG) für die Seite. Pro Code nur einmal erzeugt."""
     if code not in _wa_qr_cache:
@@ -2167,15 +2395,32 @@ def wa_qr_bild(code):
 
 
 def wa_url():
-    """Link zur WhatsApp-Seite. Ein noch mindestens einen Tag gültiger Link wird wiederverwendet."""
+    """Link zur WhatsApp-Seite. Ein noch mindestens zehn Minuten gültiger Link wird wiederverwendet."""
     with _lock:
         st = load()
         a = st.get("wa_link") or {}
-        if not a.get("t") or a.get("bis", 0) < time.time() + 86400:
+        if not a.get("t") or a.get("bis", 0) < time.time() + 600:
             a = {"t": secrets.token_urlsafe(24), "bis": time.time() + WA_LINK_GUELTIG}
             st["wa_link"] = a
             save(st)
     return f"{WEB}/whatsapp?t={a['t']}"
+
+
+def wa_link_beenden():
+    """Gekoppelt: der Link gilt nur noch zwei Minuten, damit die offene Seite „Fertig“ zeigen kann."""
+    with _lock:
+        st = load()
+        if st.get("wa_link"):
+            st["wa_link"]["bis"] = min(st["wa_link"].get("bis", 0), time.time() + 120)
+            save(st)
+
+
+def wa_technik():
+    """Codex bekommt Netz in der Sandbox nur, solange WhatsApp an ist (werkzeuge/whatsapp.py fragt 127.0.0.1)."""
+    try:
+        einrichten.technik(kit.lies_config())
+    except Exception as e:   # noqa: BLE001  WhatsApp läuft trotzdem, nachgezogen wird beim nächsten Update
+        log(f"WhatsApp: Technik nicht nachgezogen ({type(e).__name__})")
 
 
 def wa_link_gueltig(t):
@@ -2197,6 +2442,8 @@ def wa_seitenstand():
             return {"schritt": "baut"}
         if stand == "bereit":
             code = wa_qr()
+            if not code and wa_bridge_zustand() == "pairing_pending":   # Kopplung per Telefonnummer läuft
+                return {"schritt": "qr"}
             try:
                 return {"schritt": "qr", "qr": wa_qr_bild(code)} if code else {"schritt": "baut"}
             except Exception as e:
@@ -2280,7 +2527,12 @@ def wa_anbieten(immer=False):
 
 
 def wa_antwort(text):
-    """„Später“ oder „Nein danke“ auf das Angebot. Rückgabe: war es eine solche Antwort?"""
+    """„Später“ oder „Nein danke“ auf das Angebot, „WhatsApp neu verbinden“ unter /whatsapp. Rückgabe: war es eine
+    solche Antwort?"""
+    if text == WA_NEU and wa_moeglich():
+        notiere(PERSON, text)
+        wa_befehl("/whatsapp_neu")
+        return True
     a = load().get("wa_angebot") or {}
     if not a.get("offen") or text not in (WA_SPAETER, WA_NEIN):
         return False
@@ -2330,6 +2582,7 @@ def wa_begleiten(was, seit):
             return fehlschlag(stand.partition(":")[2].strip() or "Die Einrichtung ist schiefgegangen.")
         if was == "aus":
             if stand == "aus":
+                wa_technik()
                 sende_text("WhatsApp ist getrennt, auf dem Server ist davon nichts mehr. Deine Notizen zu den Menschen "
                            "bleiben. Am Handy kannst du unter Verknüpfte Geräte den Eintrag noch löschen.")
                 return ende()
@@ -2342,8 +2595,9 @@ def wa_begleiten(was, seit):
                 continue
             if not qr_seit:
                 qr_seit = time.time()
-                sende_knopf("Der QR-Code ist da. Öffne ihn am besten am Laptop, scannen musst du mit dem Handy.",
-                            "QR-Code zeigen", wa_url())
+                sende_knopf("Der QR-Code ist da. Scannen musst du ihn mit dem Handy. Hast du nur das Handy, "
+                            "verbindest du auf der Seite mit deiner Telefonnummer.", "QR-Code zeigen", wa_url())
+                sende_text(f"Am Laptop öffnest du die Seite mit diesem Link:\n{wa_url()}")
             if time.time() - qr_seit > WA_QR_ZEIT:
                 return fehlschlag("Der QR-Code ist abgelaufen, gescannt hat ihn niemand.")
         elif stand == "verknuepft" and "verknuepft" not in gemeldet:
@@ -2356,6 +2610,9 @@ def wa_begleiten(was, seit):
             log(f"WhatsApp einrichten: Exit {code}: {aus[:200]}")
             if code:
                 return fehlschlag("WhatsApp ist verbunden, aber bei mir hakt noch etwas.")
+            update(wa_bau=wa_fingerabdruck())
+            wa_link_beenden()
+            wa_technik()
             sende_text("WhatsApp ist eingerichtet. Gleich frage ich dich, wer dir nah ist, ab heute Nacht halte ich "
                        "fest, was sich bei diesen Menschen tut. /whatsapp zeigt dir den Stand, /whatsapp_aus "
                        "trennt alles wieder.")
@@ -2398,6 +2655,13 @@ def wa_befehl(cmd):
             return sende_text("Ich trenne gerade WhatsApp, ich melde mich.")
         if wa_status() != "an":
             return wa_anbieten(immer=True)
+        z = wa_bridge_zustand()   # live von der Bridge, der Stand von der Einrichtung kann alt sein
+        if z != "paired":
+            text = ("Der WhatsApp-Dienst auf deinem Server antwortet gerade nicht." if not z else
+                    "WhatsApp ist nicht mehr mit deinem Server verknüpft, zum Beispiel weil das Gerät am Handy "
+                    "entfernt wurde.")
+            return sende_text(text + f" Tipp auf „{WA_NEU}“, dann richte ich es neu ein und du scannst einen neuen "
+                              "QR-Code. Deine Notizen bleiben.", knoepfe=[WA_NEU])
         code, aus = wa_werkzeug("status")
         try:
             s = json.loads(aus)
@@ -2405,8 +2669,7 @@ def wa_befehl(cmd):
                 (f", {len(s['warteschlange'])} Chats folgen nächste Nacht" if s.get("warteschlange") else "")
         except (ValueError, KeyError):
             zeile = "noch kein Lauf"
-        verbunden = "verbunden" if stand == "fertig" else f"Server meldet „{stand or 'nichts'}“"
-        return sende_text(f"WhatsApp: {verbunden}, {zeile}. Hakt etwas, hilft /whatsapp_neu. /whatsapp_aus trennt "
+        return sende_text(f"WhatsApp: verbunden, {zeile}. Hakt etwas, hilft /whatsapp_neu. /whatsapp_aus trennt "
                           "alles wieder, deine Notizen bleiben.")
     if cmd in ("/whatsapp_ja", "/whatsapp_neu"):
         if laeuft:
@@ -2650,8 +2913,14 @@ def zeitplan():
                 einreihen("sichern", None)
             if fertig and ablage_faellig(st, t):
                 threading.Thread(target=ablage_nachts, args=(t,), daemon=True).start()
+            if fertig and (t.hour, t.minute) >= (TAGESWECHSEL, 30) and st.get("lou_geprueft") != heute \
+                    and kit_status("lou") == "an":
+                update(lou_geprueft=heute)
+                threading.Thread(target=lou_nachts, daemon=True).start()
             if runde % 10 == 0:
                 wa_anbieten()
+            if runde % 120 == 5:
+                wa_nachziehen()
             if runde % 120 == 0:
                 aufraeumen()
                 if t.hour >= 8:
@@ -2670,7 +2939,7 @@ def zeitplan():
 GOOGLE_ANLEITUNG_WEB = (
     "Hier ist dein Link: [Bei Google anmelden]({url})\n\n"
     "1. Mit deinem Google-Konto anmelden und alles freigeben. Kommt „Google hat diese App nicht überprüft“, "
-    "tippst du auf „Erweitert“ und dann auf „Weiter“\n"
+    "tippst du auf „Erweitert“ und dann auf „Zu Assistent (unsicher) wechseln“\n"
     "2. Am Ende siehst du „Fertig“, dann bin ich verbunden\n\n"
     "Klappt die Anmeldung im Telegram-Fenster nicht, halt den Link gedrückt, kopier ihn und öffne ihn in Safari "
     "oder Chrome.")
@@ -2679,7 +2948,7 @@ GOOGLE_ANLEITUNG = (
     "1. Link gedrückt halten, kopieren und in Safari oder Chrome einfügen. Im Telegram-Fenster klappt die "
     "Anmeldung oft nicht\n"
     "2. Mit deinem Google-Konto anmelden und alles freigeben. Kommt „Google hat diese App nicht überprüft“, "
-    "tippst du auf „Erweitert“ und dann auf „Weiter“\n"
+    "tippst du auf „Erweitert“ und dann auf „Zu Assistent (unsicher) wechseln“\n"
     "3. Am Ende lädt eine Seite mit „localhost“ nicht, das ist richtig. Kopier ihre ganze Adresse oben aus der "
     "Leiste und schick sie mir")
 
@@ -2741,7 +3010,7 @@ def google_anmelden():
         f"/google – Ich möchte mich bei Google anmelden. Ruf `start_google_auth` mit user_google_email "
         f"{GOOGLE_KONTO} auf und schick mir den Link mit dieser Anleitung: Link kopieren und in Safari oder Chrome "
         "öffnen, mit dem Google-Konto anmelden und alles freigeben. Kommt die Warnung, dass Google die App nicht geprüft hat, auf „Erweitert“ "
-        "und „Weiter“ tippen. Am Ende lädt eine Seite mit „localhost“ nicht, das ist richtig. Ihre komplette "
+        "und „Zu Assistent (unsicher) wechseln“ tippen. Am Ende lädt eine Seite mit „localhost“ nicht, das ist richtig. Ihre komplette "
         "Adresse kopieren und dir schicken.")})
 
 

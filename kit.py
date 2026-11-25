@@ -29,7 +29,8 @@ STANDARD = {"person": {"zeitzone": "Europe/Berlin", "sprache": "de"},
             "whatsapp": {"status": "aus"},   # an: Erweiterung eingerichtet (nur eigener Server, /whatsapp im Chat)
             "lou": {"status": "aus"},        # an: Lou verbunden, der Zugang steht als LOU_CODE in secrets.env
             "brain": {"status": "aus"},      # an: Themen geordnet in home/brain/ (brain.py)
-            "kits": {"wahl": ""}}   # vorab gewählte Kits, leer = alle anbieten (Betreuer-Box, ältere Server)
+            "kits": {"wahl": ""},   # vorab gewählte Kits, leer = alle anbieten (Betreuer-Box, ältere Server)
+            "support": {"whatsapp": ""}}   # Nummer für „Support schreiben“ (nur aus der Anleitung), leer = kein Knopf
 ANBIETER = ("claude", "chatgpt", "gemini")
 KITS = ("kalender", "whatsapp", "ablage", "lou", "brain")   # Kits, die die Person schon vor der Einrichtung wählen kann
 SCHALTER = ("whatsapp", "lou", "brain")   # Kits mit [<kit>] status = "an" | "aus"

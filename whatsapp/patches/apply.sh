@@ -3,6 +3,8 @@
 #   * delta endpoint (GET /api/messages/since) — the whole delta in ONE call
 #   * OpenAI transcription backend (upstream ships only a stub)
 #   * transcription allow-list (upstream defaults to a deny-list)
+#   * read-only REST API: send, presence, media and admin routes answer 403
+#     (nur_lesen.go; the API on 127.0.0.1 has no auth, every local process reaches it)
 # against
 # adelaidasofia/whatsapp-mcp.
 #
@@ -29,6 +31,8 @@ cp "$HERE/whisper_allowlist.go"      "$REPO/whatsapp-bridge/whisper_allowlist.go
 cp "$HERE/whisper_allowlist_test.go" "$REPO/whatsapp-bridge/whisper_allowlist_test.go"
 cp "$HERE/delta.go"                  "$REPO/whatsapp-bridge/delta.go"
 cp "$HERE/delta_test.go"             "$REPO/whatsapp-bridge/delta_test.go"
+cp "$HERE/nur_lesen.go"              "$REPO/whatsapp-bridge/nur_lesen.go"
+cp "$HERE/nur_lesen_test.go"         "$REPO/whatsapp-bridge/nur_lesen_test.go"
 
 # Idempotency, done the only way that actually holds as the patch set grows:
 # reset every file the diff touches back to the pristine tag, then apply the
@@ -48,6 +52,7 @@ ERROR: openai-backend.diff does not apply cleanly to this checkout.
 Upstream has changed one of the two patched regions:
   - whatsapp-bridge/whisper.go   (the transcribeOpenAI stub + the backend switch)
   - whatsapp-bridge/config.go    (the Whisper config block)
+  - whatsapp-bridge/server.go    (the delta route + the read-only wrapper)
 
 Do NOT force this. Re-derive the patch against the new upstream, confirm
 'go test ./...' still passes, then re-run. A half-applied patch yields a
@@ -55,9 +60,10 @@ bridge that starts fine and transcribes nothing.
 MSG
   rm -f "$REPO/whatsapp-bridge/whisper_openai.go" "$REPO/whatsapp-bridge/whisper_openai_test.go" \
         "$REPO/whatsapp-bridge/whisper_allowlist.go" "$REPO/whatsapp-bridge/whisper_allowlist_test.go" \
-        "$REPO/whatsapp-bridge/delta.go" "$REPO/whatsapp-bridge/delta_test.go"
+        "$REPO/whatsapp-bridge/delta.go" "$REPO/whatsapp-bridge/delta_test.go" \
+        "$REPO/whatsapp-bridge/nur_lesen.go" "$REPO/whatsapp-bridge/nur_lesen_test.go"
   exit 1
 fi
 
 git -C "$REPO" apply "$HERE/openai-backend.diff"
-echo "    Patches angewendet (Delta-Endpunkt + OpenAI-Backend + Transkriptions-Allow-Liste)"
+echo "    Patches angewendet (Delta-Endpunkt + OpenAI-Backend + Transkriptions-Allow-Liste + nur lesen)"

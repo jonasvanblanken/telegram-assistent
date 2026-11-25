@@ -8,6 +8,7 @@ NODE=22.12.0
 CODEX=0.162.1
 GEMINI=0.70.0
 ZIEL=/opt/pearl-kit-ki
+. "$(dirname "$0")/netz.sh"
 
 case "$(uname -m)" in
   x86_64) NA=x64 ;;
@@ -20,8 +21,8 @@ if [ "$("$ZIEL/node/bin/node" --version 2>/dev/null || true)" != "v$NODE" ]; the
   echo "   Node $NODE"
   TMP=$(mktemp -d)
   DATEI="node-v$NODE-linux-$NA.tar.xz"
-  curl -fsSL "https://nodejs.org/dist/v$NODE/$DATEI" -o "$TMP/$DATEI"
-  curl -fsSL "https://nodejs.org/dist/v$NODE/SHASUMS256.txt" -o "$TMP/SHASUMS256.txt"
+  curl -fsSL --connect-timeout 20 -m 600 --retry 2 --retry-delay 10 "https://nodejs.org/dist/v$NODE/$DATEI" -o "$TMP/$DATEI"
+  curl -fsSL --connect-timeout 20 -m 60 --retry 2 --retry-delay 10 "https://nodejs.org/dist/v$NODE/SHASUMS256.txt" -o "$TMP/SHASUMS256.txt"
   (cd "$TMP" && grep " $DATEI\$" SHASUMS256.txt | sha256sum -c --quiet -) || { echo "Prüfsumme von Node stimmt nicht" >&2; exit 1; }
   rm -rf "$ZIEL/node"
   install -d -m 755 "$ZIEL/node"
@@ -37,7 +38,8 @@ version() {
 }
 if [ "$(version @openai/codex)" != "$CODEX" ] || [ "$(version @google/gemini-cli)" != "$GEMINI" ]; then
   echo "   Codex $CODEX, Gemini CLI $GEMINI"
-  npm install -g --prefix "$ZIEL" --no-fund --no-audit --loglevel=error "@openai/codex@$CODEX" "@google/gemini-cli@$GEMINI"
+  nochmal timeout -k 30 900 npm install -g --prefix "$ZIEL" --no-fund --no-audit --loglevel=error --fetch-timeout=60000 \
+    "@openai/codex@$CODEX" "@google/gemini-cli@$GEMINI"
 fi
 chown -R root:root "$ZIEL"
 chmod -R go-w "$ZIEL"
@@ -45,7 +47,7 @@ chmod -R go-w "$ZIEL"
 # rclone spiegelt home/ auf Wunsch nach Google Drive, Dropbox oder OneDrive (ablage.py). Ein Programm für alle drei.
 if ! command -v rclone >/dev/null && command -v apt-get >/dev/null; then
   echo "   rclone für die Ablage"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 rclone >/dev/null \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 rclone >/dev/null \
     || echo "   rclone ließ sich nicht installieren, die Ablage in der Cloud fehlt dann" >&2
 fi
 
@@ -59,7 +61,7 @@ if [ "$SPERRE" = 1 ] && command -v apt-get >/dev/null; then
   if ! command -v bwrap >/dev/null \
      || { [ ! -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ] && [ ! -f /etc/apparmor.d/bwrap-userns-restrict ]; }; then
     echo "   bubblewrap und AppArmor-Profile für die Sandbox von Codex"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 bubblewrap apparmor-profiles apparmor-utils >/dev/null \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 bubblewrap apparmor-profiles apparmor-utils >/dev/null \
       || echo "   bubblewrap ließ sich nicht installieren" >&2
   fi
   if [ ! -f /etc/apparmor.d/bwrap-userns-restrict ] && [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
