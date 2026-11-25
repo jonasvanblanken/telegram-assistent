@@ -54,6 +54,7 @@ if [ ! -e "$H/assistent/config.toml" ] && [ -n "$DOMAIN" ]; then
   WPORT=$(frei 8201 8299)
   ARGS=(--web-adresse "https://$DOMAIN/$1" --web-port "$WPORT")
   [ -n "$SELBST" ] || ARGS+=(--admin "$BETREUER")
+  if [ -n "${NEU_KITS:-}" ]; then ARGS+=(--kits "$NEU_KITS"); fi   # vorab im Browser gewählte Kits (box/selbst.sh)
   if [ -r /etc/pearl-kit/google-client.json ]; then
     PORT=$(frei 8101 8199)
     ARGS+=(--port "$PORT")

@@ -59,6 +59,7 @@ def config_text(a):
         "ki": {"anbieter": a.anbieter, "modell": a.modell, "klein": a.klein, "effort": a.effort, "rechte": a.rechte},
         "google": {"konto": a.google or "", "port": a.port or 0, "dienste": "kalender,mail"},
         "web": {"adresse": (a.web_adresse or "").rstrip("/"), "port": a.web_port or 0},
+        "kits": {"wahl": a.kits or ""},
     }
     out = ["# Instanz des Assistenten (pearl-kit). Nach Änderungen: einrichten.py --nachziehen,",
            "# dann systemctl --user restart assistent google-mcp", ""]
@@ -286,8 +287,12 @@ def main():
     a.add_argument("--rechte", default="auto")
     a.add_argument("--nachziehen", action="store_true", help="nur Technik aus der vorhandenen config.toml neu schreiben")
     a.add_argument("--whatsapp", choices=["an", "aus"], help="Erweiterung WhatsApp schalten (ruft werkzeuge/whatsapp.py)")
+    a.add_argument("--kits", default="", help=f'vorab gewählte Kits, Komma-Liste aus {", ".join(kit.KITS)} oder "{kit.KITS_OHNE}"')
     a.add_argument("--neu-config", action="store_true", help="vorhandene config.toml überschreiben")
     x = a.parse_args()
+    if kit.kits_gewaehlt(x.kits) is False:   # die Einrichtung soll daran nicht scheitern: dann alles anbieten
+        print(f"--kits {x.kits!r} unbekannt, erlaubt sind {', '.join(kit.KITS)} oder {kit.KITS_OHNE}. Biete alle Kits an.")
+        x.kits = ""
 
     os.makedirs(kit.INSTANZ, mode=0o700, exist_ok=True)
     if x.whatsapp:

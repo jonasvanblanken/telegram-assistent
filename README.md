@@ -16,11 +16,12 @@ write_files:
     content: |
       TG_TOKEN=<Token von @BotFather>
       EINLADUNG=<32 Hex-Zeichen>
+      AUSSTATTUNG=<vorab gewählte Kits: whatsapp, ablage, kalender mit Komma, oder ohne>
 runcmd:
   - [bash, -c, "git clone -q <dieses Repo> /opt/assistent-quelle && git -C /opt/assistent-quelle checkout -q <Commit> && bash /opt/assistent-quelle/box/selbst.sh"]
 ```
 
-`box/selbst.sh` richtet den Server ohne Rückfragen ein: Pakete, Caddy mit HTTPS über `<ip>.sslip.io` (Ausweich: nip.io), einen Assistenten ohne Betreuer, Wache über den eigenen Bot. Den Fortschritt schreibt es in die Beschreibung des Bots (`⏳ 1/3` bis `3/3`, Fehler mit `⚠️`), fertig ist er, wenn dort „Dein persönlicher Assistent …“ steht. Danach öffnet die Person `https://t.me/<bot>?start=<EINLADUNG>`, tippt auf Starten und richtet Namen und KI ein. Google bleibt auf dem eigenen Server vorerst aus. Protokoll: `/var/log/assistent-installation.log`.
+`box/selbst.sh` richtet den Server ohne Rückfragen ein: Pakete, Caddy mit HTTPS über `<ip>.sslip.io` (Ausweich: nip.io), einen Assistenten ohne Betreuer, Wache über den eigenen Bot. Den Fortschritt schreibt es in die Beschreibung des Bots (`⏳ 1/3` bis `3/3`, Fehler mit `⚠️`), fertig ist er, wenn dort „Dein persönlicher Assistent …“ steht. Danach öffnet die Person `https://t.me/<bot>?start=<EINLADUNG>`, tippt auf Starten und richtet Namen und KI ein. Die Einrichtung zeigt nur die vorab gewählten Kits (`[kits] wahl` in der config.toml, fehlt die Zeile: alle), in den Einstellungen lässt sich jedes Kit später dazunehmen. Google bleibt auf dem eigenen Server vorerst aus. Protokoll: `/var/log/assistent-installation.log`.
 
 Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
 
@@ -129,6 +130,7 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 | Log einer Person | `journalctl _UID=$(id -u a-anna) --user-unit assistent -n 50` |
 | Selbsttest | `runuser -u a-anna -- env HOME=/home/a-anna python3 /opt/pearl-kit/assistent.py pruefen` |
 | Neu starten | `systemctl --user -M a-anna@ restart assistent` |
+| Einstellungen | Der Menüknopf „Einstellungen“ neben dem Eingabefeld öffnet `<web>/einstellungen` als Web App. Die Seite weist sich mit Telegrams signiertem `initData` aus (nur das Konto der Person), dann gibt es KI, Kalender und Mail, Ablage (Spiegel per rclone nach Google Drive, Dropbox oder OneDrive, `ablage.py`) und Meine Daten (ZIP in den Chat, auf Wunsch am Ersten jedes Monats). Dropbox und OneDrive erscheinen erst, wenn in `ablage.py` die öffentliche App-Kennung steht |
 | KI neu anmelden oder wechseln | Die Person schickt `/ki`: Sie wechselt per Antippen zwischen allen verbundenen KIs (`/ki_claude`, `/ki_chatgpt`) oder verbindet eine weitere, `/anmelden` öffnet die Einrichtung, für Kalender und Mail `/google`. Lehnt die KI die Anmeldung ab, bekommt sie den Link von selbst. Beim Wechsel sichert erst die bisherige KI das offene Gespräch, dann beginnt ein neues, das Gedächtnis bleibt |
 | Ohne Domain neu anmelden | Claude: `sudo -u a-anna -i claude setup-token`, Token in `secrets.env` als `CLAUDE_CODE_OAUTH_TOKEN` ersetzen, `CLAUDE_TOKEN_SEIT` auf heute. ChatGPT: `auth.json` in `~/.local/share/assistent/codex/` löschen und `person-anlegen.sh anna` noch einmal. Gemini ebenso mit `gemini/.gemini/oauth_creds.json` |
 | Modell oder Zeiten ändern | Modell, Effort, Rechte: `[ki]` in `config.toml` der Person (leer heißt Standard des Anbieters), dann Neustart. Zeiten: Die Person sagt es dem Assistenten, er ändert seine `jobs/` selbst |

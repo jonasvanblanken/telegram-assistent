@@ -110,7 +110,7 @@ def server_starten(port):
 class Instanz:
     """Frische Instanz in einem Temp-Ordner, Umgebung so gesetzt, dass kit und assistent dorthin zeigen."""
 
-    def __init__(self, google=True, port=None, anbieter="claude", web_port=0, einladung=False):
+    def __init__(self, google=True, port=None, anbieter="claude", web_port=0, einladung=False, kits=""):
         self.tmp = tempfile.TemporaryDirectory()
         t = self.tmp.name
         fake = os.path.join(KIT, "tests")
@@ -127,6 +127,8 @@ class Instanz:
             args += (["--google", "test@example.org"] if not einladung else []) + ["--port", str(self.port)]
         if web_port:
             args += ["--web-adresse", "https://box.example.de/test", "--web-port", str(web_port)]
+        if kits:
+            args += ["--kits", kits]
         r = subprocess.run(args, env={**os.environ, **self.env}, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         with open(self.env["ASSISTENT_SECRETS"], "w") as f:
@@ -223,6 +225,28 @@ class Vorlage(unittest.TestCase):
             kit.lies_config(f.name)
         self.assertIn("[admin] name", str(e.exception))
         os.unlink(f.name)
+
+    def test_kits_wahl(self):
+        import kit
+        self.assertIsNone(kit.kits_gewaehlt(""))
+        self.assertEqual(kit.kits_gewaehlt("ohne"), set())
+        self.assertEqual(kit.kits_gewaehlt("whatsapp, ablage"), {"whatsapp", "ablage"})
+        self.assertIs(kit.kits_gewaehlt("whatsapp,lotto"), False)
+        inst = Instanz(google=False, kits="whatsapp,lotto")   # unbekannt: die Einrichtung läuft, alles wird angeboten
+        try:
+            cfg = kit.lies_config(os.path.join(inst.env["ASSISTENT_DIR"], "config.toml"))
+            self.assertEqual(cfg["kits"]["wahl"], "")
+        finally:
+            inst.weg()
+        inst = Instanz(google=False, kits="whatsapp")
+        try:
+            pfad = os.path.join(inst.env["ASSISTENT_DIR"], "config.toml")
+            self.assertEqual(kit.lies_config(pfad)["kits"]["wahl"], "whatsapp")
+            kit.setze_config("kits", "wahl", "lotto", pfad)
+            with self.assertRaises(kit.ConfigFehler):
+                kit.lies_config(pfad)
+        finally:
+            inst.weg()
 
 
 class Chat:
@@ -1029,6 +1053,8 @@ class EigenerServer(unittest.TestCase):
         anlegen = open(os.path.join(KIT, "box", "person-anlegen.sh"), encoding="utf-8").read()
         self.assertIn('[ -n "$SELBST" ] || ARGS+=(--admin', anlegen)
         self.assertIn("NEU_EINLADUNG", anlegen)
+        self.assertIn('--kits "$NEU_KITS"', anlegen)
+        self.assertIn('NEU_KITS="$AUSSTATTUNG"', open(os.path.join(KIT, "box", "selbst.sh"), encoding="utf-8").read())
 
 
 class Wache(unittest.TestCase):
@@ -1392,6 +1418,31 @@ class WhatsApp(Chat, unittest.TestCase):
         ende = time.time() + 15
         while time.time() < ende and self.a._wa_faden.is_alive():
             time.sleep(0.1)
+
+    def test_vorab_gewaehlte_kits(self):
+        web = freier_port()
+        self.inst.weg()
+        self.inst = Instanz(google=False, port=self.port, web_port=web, kits="ablage")
+        t = self.inst.tmp.name
+        with open(f"{t}/unit.path", "w") as f:
+            f.write("")
+        self.inst.env.update({"ASSISTENT_WA_DIR": f"{t}/wa", "ASSISTENT_WA_UNIT": f"{t}/unit.path"})
+        os.environ.update(self.inst.env)
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.a.ADMIN = ""
+        pf_srv, _ = self.a.pforte_starten()
+        self.addCleanup(pf_srv.shutdown)
+        tok = self.a.anmeldelink().split("t=", 1)[1]
+        with urllib.request.urlopen(f"http://127.0.0.1:{web}/einrichten/stand?t={tok}", timeout=10) as r:
+            stand = json.loads(r.read())
+        self.assertEqual(stand["kits"], ["ablage"])
+        self.assertTrue(stand["whatsapp"]["moeglich"])   # möglich bleibt es, die Seite blendet den Schritt nur aus
+        with urllib.request.urlopen(f"http://127.0.0.1:{web}/einrichten?t={tok}", timeout=10) as r:
+            self.assertIn("hat('whatsapp')", r.read().decode())
+        self.a.jetzt = lambda: datetime.datetime(2026, 11, 25, 12, 0, tzinfo=self.a.TZ)
+        self.assertFalse(self.a.wa_anbieten())   # nicht gewählt: kein Angebot von selbst
+        self.a.KITS = None
+        self.assertTrue(self.a.wa_anbieten())    # ohne Vorauswahl wie bisher
 
     def test_fehler_auf_dem_server(self):
         web = freier_port()

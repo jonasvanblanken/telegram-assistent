@@ -26,8 +26,11 @@ STANDARD = {"person": {"zeitzone": "Europe/Berlin", "sprache": "de"},
             "ki": {"anbieter": "", "modell": "", "klein": "", "effort": "", "rechte": "auto"},
             "google": {"konto": "", "port": 0, "dienste": "kalender,mail"},
             "web": {"adresse": "", "port": 0},
-            "whatsapp": {"status": "aus"}}   # an: Erweiterung eingerichtet (nur eigener Server, /whatsapp im Chat)
+            "whatsapp": {"status": "aus"},   # an: Erweiterung eingerichtet (nur eigener Server, /whatsapp im Chat)
+            "kits": {"wahl": ""}}   # vorab gewählte Kits, leer = alle anbieten (Betreuer-Box, ältere Server)
 ANBIETER = ("claude", "chatgpt", "gemini")
+KITS = ("kalender", "whatsapp", "ablage")   # Kits, die die Person schon vor der Einrichtung wählen kann
+KITS_OHNE = "ohne"   # [kits] wahl, wenn sie keins gewählt hat
 RECHTE = {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}   # Claude: --permission-mode
 RECHTE_ANDERE = {"auto", "voll"}
 GOOGLE_DIENSTE = {   # Schalter auf der Einrichtungsseite -> --permissions von workspace-mcp (Senden bleibt immer aus)
@@ -72,12 +75,26 @@ def lies_config(pfad=CONFIG):
         raise ConfigFehler(f"[ki] rechte muss eins von {', '.join(sorted(erlaubt))} sein")
     if cfg["whatsapp"]["status"] not in ("an", "aus"):
         raise ConfigFehler('[whatsapp] status muss "an" oder "aus" sein')
+    if kits_gewaehlt(cfg["kits"]["wahl"]) is False:
+        raise ConfigFehler(f'[kits] wahl muss leer, "{KITS_OHNE}" oder eine Liste aus {", ".join(KITS)} sein')
     if cfg["web"]["adresse"]:
         if not re.fullmatch(r"https://[^/\s]+(/[a-z0-9-]+)?", cfg["web"]["adresse"]):
             raise ConfigFehler("[web] adresse muss so aussehen: https://box.example.de/kurzname")
         if not 1024 < cfg["web"]["port"] < 65536:
             raise ConfigFehler("[web] adresse gesetzt, aber kein gültiger [web] port")
     return cfg
+
+
+def kits_gewaehlt(wahl):
+    """[kits] wahl lesen. None: nichts vorab gewählt, alles wird angeboten. Sonst die Menge der gewählten Kits
+    (leer bei "ohne"). False: ungültig."""
+    wahl = str(wahl or "").strip()
+    if not wahl:
+        return None
+    if wahl == KITS_OHNE:
+        return set()
+    teile = {k.strip() for k in wahl.split(",") if k.strip()}
+    return teile if teile and teile <= set(KITS) else False
 
 
 def setze_config(abschnitt, schluessel, wert, pfad=CONFIG):

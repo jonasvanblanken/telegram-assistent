@@ -479,14 +479,15 @@ async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:
   body:JSON.stringify(Object.assign({t},d))});return await r.json()}catch(e){return{ok:false,fehler:'Die Verbindung ist weg. Versuch es noch einmal.'}}}
 function oeffne(url){if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}
 function fehler(id,text){$(id).textContent=text||'';$(id).hidden=!text}
+function hat(k){return S.eingerichtet||!S.kits||S.kits.includes(k)}   // vorab gewählte Kits, in den Einstellungen alle
 function erledigt(){return{namen:!!(S.person&&S.assistent),ki:!!S.anbieter,
-  google:!S.google.moeglich||S.google.verbunden||S.google.uebersprungen,
-  whatsapp:!S.whatsapp||!S.whatsapp.moeglich||!!S.whatsapp.wahl||S.whatsapp.an||S.eingerichtet,
+  google:!S.google.moeglich||!hat('kalender')||S.google.verbunden||S.google.uebersprungen,
+  whatsapp:!S.whatsapp||!S.whatsapp.moeglich||!hat('whatsapp')||!!S.whatsapp.wahl||S.whatsapp.an||S.eingerichtet,
   profil:!!(S.fragebogen&&S.fragebogen.erledigt)}}
 function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
-  const e=erledigt(),wa=!!(S.whatsapp&&S.whatsapp.moeglich);$('s-google').hidden=!S.google.moeglich;
-  document.querySelector('[data-zu=google]').hidden=!S.google.moeglich;
+  const e=erledigt(),wa=!!(S.whatsapp&&S.whatsapp.moeglich&&hat('whatsapp')),go=!!(S.google.moeglich&&hat('kalender'));
+  $('s-google').hidden=document.querySelector('[data-zu=google]').hidden=!go;
   $('s-whatsapp').hidden=document.querySelector('[data-zu=whatsapp]').hidden=!wa;
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
     google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
@@ -505,7 +506,9 @@ function weiter(){
 async function abschluss(){
   if(!S.eingerichtet){const r=await post('einrichten/fertig',{});
     if(r.ok===false){offen='ki';zeichne();return fehler('code-fehler',r.fehler)}}
-  fertig('Fertig',(S.assistent||'Dein Assistent')+' schreibt dir jetzt in Telegram.')}
+  fertig('Fertig',(S.assistent||'Dein Assistent')+' schreibt dir jetzt in Telegram.');
+  if(S.kits&&S.kits.includes('ablage')&&!S.eingerichtet){const s=await stand();   // vorab gewählt: Ablage gleich hier verbinden
+    if(s&&s.ablage){S.ablage=s.ablage;ablageZeichnen();if(!$('s-ablage').hidden)$('s-ablage').scrollIntoView({behavior:'smooth',block:'start'})}}}
 function fertig(titel,text){clearInterval(zeit);clearInterval(googleZeit);zeit=null;offen='';zeichne();$('fertig-titel').textContent=titel;
   $('fertig-text').textContent=text;$('fertig').hidden=false;
   for(const k of STUFEN)$('s-'+k).classList.remove('offen');$('fertig').scrollIntoView({behavior:'smooth',block:'center'})}

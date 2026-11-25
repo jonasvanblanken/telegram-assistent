@@ -3,6 +3,8 @@
 # Anleitung im Browser baut) und braucht nur zwei Werte aus /root/assistent.env:
 #   TG_TOKEN=<Token des Bots von @BotFather>
 #   EINLADUNG=<Code aus dem t.me-Link, den die Anleitung schon angezeigt hat>
+# Dazu optional AUSSTATTUNG=<vorab gewählte Kits, z. B. whatsapp,ablage oder ohne>. Fehlt die Zeile, bietet die
+# Einrichtungsseite alle Kits an.
 # Den Fortschritt schreibt das Skript in die Beschreibung des Bots, die Anleitung liest sie im Browser mit:
 #   „⏳ 2/3 …“ läuft, „⚠️ …“ ist schiefgegangen, „Dein persönlicher Assistent …“ (setzt assistent.py) heißt fertig.
 # HTTPS ohne eigene Domain: <ip-mit-strichen>.sslip.io, klappt das Zertifikat dort nicht, nip.io.
@@ -18,6 +20,8 @@ TG_TOKEN=$(sed -n 's/^TG_TOKEN=//p' "$ENVDATEI" | tr -d ' "'"'"'\r')
 EINLADUNG=$(sed -n 's/^EINLADUNG=//p' "$ENVDATEI" | tr -d ' "'"'"'\r')
 [[ "$TG_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]] || { echo "TG_TOKEN fehlt oder sieht falsch aus" >&2; exit 1; }
 [[ "$EINLADUNG" =~ ^[a-f0-9]{16,64}$ ]] || { echo "EINLADUNG fehlt oder sieht falsch aus" >&2; exit 1; }
+AUSSTATTUNG=$(sed -n 's/^AUSSTATTUNG=//p' "$ENVDATEI" | tr -d ' "'"'"'\r')
+[[ -z "$AUSSTATTUNG" || "$AUSSTATTUNG" =~ ^[a-z]+(,[a-z]+)*$ ]] || { echo "AUSSTATTUNG sieht falsch aus, ich biete alle Kits an"; AUSSTATTUNG=""; }
 API="${TELEGRAM_API:-https://api.telegram.org}/bot$TG_TOKEN"
 
 stand() {  # Beschreibung des Bots setzen, Fehler hier halten die Einrichtung nicht auf
@@ -67,7 +71,7 @@ echo "   https://$DOMAIN"
 
 SCHRITT="Assistent"
 stand "⏳ 3/3 Der Server richtet deinen Assistenten ein."
-SELBST=1 NEU_TG_TOKEN="$TG_TOKEN" NEU_EINLADUNG="$EINLADUNG" bash /opt/pearl-kit/box/person-anlegen.sh "$KURZ" </dev/null
+SELBST=1 NEU_TG_TOKEN="$TG_TOKEN" NEU_EINLADUNG="$EINLADUNG" NEU_KITS="$AUSSTATTUNG" bash /opt/pearl-kit/box/person-anlegen.sh "$KURZ" </dev/null
 
 SCHRITT="Abschluss"
 rm -f "$ENVDATEI"

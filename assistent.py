@@ -86,6 +86,7 @@ GOOGLE_KONTO = CFG["google"].get("konto") or ""
 GOOGLE_PORT = int(CFG["google"].get("port") or 0)
 WEB = (CFG["web"].get("adresse") or "").rstrip("/")   # Einrichtungsseite, z. B. https://box.example.de/anna
 WEB_PORT = int(CFG["web"].get("port") or 0)
+KITS = kit.kits_gewaehlt(CFG["kits"]["wahl"])   # None: nichts vorab gewählt, die Einrichtung bietet alles an
 ANMELDE_GUELTIG = 3600           # so lange gilt ein Link zur Einrichtungsseite
 TAGESWECHSEL = 4                 # neues Gespräch ab 04:00
 NACHHOLEN = 3 * 3600             # verpasste Läufe höchstens drei Stunden später nachholen
@@ -670,7 +671,7 @@ def einrichtung_stand():
                        "dienste": [d for d in CFG["google"]["dienste"].split(",") if d],
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen"))},
             "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"},
-            "ablage": ablage_stand()}
+            "ablage": ablage_stand(), "kits": None if KITS is None else sorted(KITS)}
 
 
 def google_web(query):
@@ -1977,6 +1978,7 @@ def wa_anbieten(immer=False):
     a = st.get("wa_angebot") or {}
     if not immer:
         if not (wa_moeglich() and eingerichtet() and KI_ANBIETER) or wa_status() == "an" or wa_laeuft() \
+                or (KITS is not None and "whatsapp" not in KITS) \
                 or st.get("whatsapp") or a.get("nein") or a.get("ja") or a.get("anzahl", 0) >= 2 \
                 or time.time() < a.get("wieder", 0) or time.time() - st.get("begruesst", 0) < 3 * 86400 \
                 or not 10 <= jetzt().hour < 19:
