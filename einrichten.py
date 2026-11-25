@@ -7,6 +7,7 @@
   python3 /opt/pearl-kit/einrichten.py --admin Kim --web-adresse https://box.example.de/anna --web-port 8201 \
       [--port 8101]                                       Einladung: alles Weitere wählt die Person selbst
   python3 /opt/pearl-kit/einrichten.py --nachziehen      Technik neu aus config.toml
+  python3 /opt/pearl-kit/einrichten.py --lou an|aus      Kit schalten, ebenso --brain und --whatsapp
 
 Ohne --anbieter wählt die Person ihre KI selbst auf der Einrichtungsseite (braucht --web-adresse). Mit
 --web-adresse dürfen auch --person, --telegram-id und --assistent fehlen: Die Person bekommt einen Einladungslink,
@@ -17,7 +18,8 @@ modell, klein und effort heißen: Standard des Anbieters (anbieter.py).
 Schreibt ~/assistent/config.toml (nur beim ersten Mal oder mit --neu-config), settings.json, mcp.json,
 google.env und die Einstellungen von Codex und Gemini immer neu, und kopiert vorlage/home/ nach ~/assistent/home/, ohne vorhandene Dateien anzufassen:
 Was der Assistent schon gelernt hat, bleibt. Platzhalter {{…}} werden ersetzt, Abschnitte zwischen
-<!-- google --> und <!-- /google --> bleiben nur mit Google-Konto stehen.
+<!-- google --> und <!-- /google --> bleiben nur mit Google-Konto stehen, ebenso <!-- lou -->, <!-- brain -->
+und <!-- whatsapp --> nur mit eingeschaltetem Kit.
 """
 import argparse
 import datetime
@@ -26,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 import anbieter
@@ -58,6 +61,8 @@ GOOGLE_BLOCK = block("google")
 BETREUT_BLOCK = block("betreut")   # Box mit Betreuer (ADMIN gesetzt)
 SELBST_BLOCK = block("selbst")     # eigener Server der Person, ohne Betreuer
 WHATSAPP_BLOCK = block("whatsapp")   # Erweiterung WhatsApp eingeschaltet
+LOU_BLOCK = block("lou")             # Kit Lou verbunden
+BRAIN_BLOCK = block("brain")         # Kit Brain eingeschaltet
 PLATZHALTER = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 
@@ -90,8 +95,17 @@ def werte(cfg):
     return {"PERSON": cfg["person"]["name"], "ASSISTENT": cfg["assistent"]["name"], "ADMIN": cfg["admin"]["name"],
             "ZEITZONE": cfg["person"]["zeitzone"], "GOOGLE_KONTO": cfg["google"]["konto"],
             "GOOGLE_PORT": str(cfg["google"]["port"]), "HOME": kit.HOME_DIR, "INSTANZ": kit.INSTANZ, "KIT": KIT,
-            "HEUTE": datetime.date.today().isoformat(),
-            "WHATSAPP": "an" if cfg["whatsapp"]["status"] == "an" else ""}
+            "HEUTE": datetime.date.today().isoformat(), "DATEN": kit.DATEN,
+            "WHATSAPP": "an" if cfg["whatsapp"]["status"] == "an" else "",
+            "LOU": "an" if lou_adresse(cfg) else "",
+            "BRAIN": "an" if cfg["brain"]["status"] == "an" else ""}
+
+
+def lou_adresse(cfg):
+    """Adresse von Lou mit dem Zugang der Person, leer ohne Lou. Der Code in der Adresse ist der Zugang: Er steht in
+    secrets.env, in mcp.json und den Einstellungen von Codex und Gemini, nie in home/ oder im Git-Stand."""
+    code = kit.secret("LOU_CODE") if cfg["lou"]["status"] == "an" else ""
+    return f"{kit.lou_url()}/mcp/{code}" if code else ""
 
 
 def rendern(text, w, google):
@@ -100,6 +114,8 @@ def rendern(text, w, google):
     text = BETREUT_BLOCK.sub(lambda m: m.group(1) if betreut else "", text)
     text = SELBST_BLOCK.sub(lambda m: "" if betreut else m.group(1), text)
     text = WHATSAPP_BLOCK.sub(lambda m: m.group(1) if w.get("WHATSAPP") else "", text)
+    text = LOU_BLOCK.sub(lambda m: m.group(1) if w.get("LOU") else "", text)
+    text = BRAIN_BLOCK.sub(lambda m: m.group(1) if w.get("BRAIN") else "", text)
 
     def ersetze(m):
         if m.group(1) not in w:
@@ -250,18 +266,21 @@ def technik(cfg):
     """settings.json, mcp.json, google.env, Codex- und Gemini-Einstellungen und .gitignore aus config.toml."""
     w = werte(cfg)
     google = bool(cfg["google"]["konto"])
+    lou = lou_adresse(cfg)
     settings = json.loads(rendern(open(os.path.join(VORLAGE, "settings.vorlage.json"), encoding="utf-8").read(), w, google))
-    if not google:
-        settings["permissions"]["allow"] = [r for r in settings["permissions"]["allow"] if not r.startswith("mcp__google")]
-        settings["permissions"]["deny"] = [r for r in settings["permissions"]["deny"] if not r.startswith("mcp__google")]
+    weg = (() if google else ("mcp__google",)) + (() if lou else ("mcp__lou",))
+    for art in ("allow", "deny"):
+        settings["permissions"][art] = [r for r in settings["permissions"][art] if not r.startswith(weg or "\0")]
     schreibe(os.path.join(kit.INSTANZ, "settings.json"), json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
     mcp = json.loads(rendern(open(os.path.join(VORLAGE, "mcp.vorlage.json"), encoding="utf-8").read(), w, google)) \
         if google else {"mcpServers": {}}
+    if lou:
+        mcp["mcpServers"]["lou"] = {"type": "http", "url": lou}
     schreibe(os.path.join(kit.INSTANZ, "mcp.json"), json.dumps(mcp, ensure_ascii=False, indent=2) + "\n")
     gport = cfg["google"]["port"] if google else 0
-    schreibe(os.path.join(anbieter.CODEX_HOME, "config.toml"), anbieter.codex_config(kit.HOME_DIR, gport))
+    schreibe(os.path.join(anbieter.CODEX_HOME, "config.toml"), anbieter.codex_config(kit.HOME_DIR, gport, lou))
     schreibe(os.path.join(anbieter.GEMINI_HOME, ".gemini", "settings.json"),
-             json.dumps(anbieter.gemini_settings(gport), ensure_ascii=False, indent=2) + "\n")
+             json.dumps(anbieter.gemini_settings(gport, lou), ensure_ascii=False, indent=2) + "\n")
     if google:
         port = cfg["google"]["port"]
         daten = os.path.join(kit.DATEN, "google")
@@ -280,8 +299,64 @@ def technik(cfg):
             f"GOOGLE_CLIENT_SECRET_PATH={google_client()}",
             f'GOOGLE_RECHTE="{google_rechte(cfg)}"',
             "OAUTHLIB_INSECURE_TRANSPORT=1", ""]))
-    schreibe(os.path.join(kit.INSTANZ, ".gitignore"), "home/eingang/\nhome/ausgang/\nhome/whatsapp/.sweep/\ngoogle.env\n*.tmp\n",
-             0o644)
+    schreibe(os.path.join(kit.INSTANZ, ".gitignore"),   # mcp.json trägt die Einladung von Lou, entsteht neu aus config.toml
+             "home/eingang/\nhome/ausgang/\nhome/whatsapp/.sweep/\ngoogle.env\nmcp.json\n*.tmp\n", 0o644)
+
+
+NAMEN = {"whatsapp": "WhatsApp", "lou": "Lou", "brain": "Brain"}
+
+
+def brain_anlegen(cfg):
+    """home/brain/ aus der Vorlage des Kits Brain (brain.py), Vorhandenes bleibt. Rückgabe: neu angelegte Pfade."""
+    import brain
+    return brain.anlegen(kit.HOME_DIR, werte(cfg))
+
+
+def schalten(name, wert):
+    """Kit an oder aus: config.toml, Technik, CLAUDE.md und unveränderte Vorlagen in home/. Rückgabe: Meldung."""
+    alt = kit.lies_config()
+    if name == "lou" and wert == "an" and not kit.secret("LOU_CODE"):
+        raise kit.ConfigFehler("Für Lou fehlt der Zugang. Die Person verbindet Lou in den Einstellungen (Karte Lou).")
+    da = os.path.isfile(os.path.join(kit.HOME_DIR, "CLAUDE.md"))
+    neu = []
+    if name == "brain" and wert == "an" and da:
+        try:
+            neu += brain_anlegen(alt)
+        except ImportError:
+            raise kit.ConfigFehler("Brain fehlt in dieser Fassung des Kits.")
+    kit.setze_config(name, "status", wert)
+    cfg = kit.lies_config()
+    technik(cfg)
+    if da:
+        neu += home_umschalten(werte(alt), werte(cfg), bool(cfg["google"]["konto"]))
+    return f"{NAMEN[name]} {wert}" + (f", erneuert: {', '.join(sorted(neu))}" if neu else "")
+
+
+def module_nachziehen(cfg):
+    """Neue Fassung des Kits für eingeschaltete Module: WhatsApp erneuert seine eigenen Dateien
+    (werkzeuge/whatsapp.py nachziehen), Brain legt neue Vorlagen an. Scheitert eins, läuft der Rest weiter."""
+    if os.environ.get("ASSISTENT_NACHZIEHEN"):   # ein Modul ruft einrichten.py --nachziehen selbst auf
+        return
+    if cfg["whatsapp"]["status"] == "an":
+        try:
+            p = subprocess.run([sys.executable, os.path.join(KIT, "werkzeuge", "whatsapp.py"), "nachziehen"],
+                               capture_output=True, text=True, timeout=300, cwd=kit.HOME_DIR,
+                               env={**os.environ, "ASSISTENT_NACHZIEHEN": "1"})
+            if p.returncode == 2 and "invalid choice" in p.stderr:
+                pass   # Werkzeug kennt nachziehen noch nicht
+            elif p.returncode:
+                print(f"WhatsApp nicht nachgezogen: {(p.stderr or p.stdout).strip()[-300:]}")
+            elif p.stdout.strip():
+                print(p.stdout.strip())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"WhatsApp nicht nachgezogen ({type(e).__name__})")
+    if cfg["brain"]["status"] == "an":
+        try:
+            neu = brain_anlegen(cfg)
+            if neu:
+                print(f"Brain: neu angelegt {', '.join(sorted(neu))}")
+        except Exception as e:   # noqa: BLE001  Brain darf das Update nicht aufhalten
+            print(f"Brain nicht nachgezogen ({type(e).__name__}: {e})")
 
 
 def main():
@@ -303,6 +378,8 @@ def main():
     a.add_argument("--rechte", default="auto")
     a.add_argument("--nachziehen", action="store_true", help="nur Technik aus der vorhandenen config.toml neu schreiben")
     a.add_argument("--whatsapp", choices=["an", "aus"], help="Erweiterung WhatsApp schalten (ruft werkzeuge/whatsapp.py)")
+    a.add_argument("--lou", choices=["an", "aus"], help="Kit Lou schalten (verbinden geht in den Einstellungen, Karte Lou)")
+    a.add_argument("--brain", choices=["an", "aus"], help="Kit Brain schalten (home/brain/)")
     a.add_argument("--kits", default="", help=f'vorab gewählte Kits, Komma-Liste aus {", ".join(kit.KITS)} oder "{kit.KITS_OHNE}"')
     a.add_argument("--neu-config", action="store_true", help="vorhandene config.toml überschreiben")
     x = a.parse_args()
@@ -311,19 +388,13 @@ def main():
         x.kits = ""
 
     os.makedirs(kit.INSTANZ, mode=0o700, exist_ok=True)
-    if x.whatsapp:
-        try:
-            alt = kit.lies_config()
-        except kit.ConfigFehler as e:
-            sys.exit(str(e))
-        kit.setze_config("whatsapp", "status", x.whatsapp)
-        cfg = kit.lies_config()
-        technik(cfg)
-        google = bool(cfg["google"]["konto"])
-        neu = home_umschalten(werte(alt), werte(cfg), google) \
-            if os.path.isfile(os.path.join(kit.HOME_DIR, "CLAUDE.md")) else []
-        print(f"WhatsApp {x.whatsapp}" + (f", erneuert: {', '.join(sorted(neu))}" if neu else ""))
-        return
+    for name in kit.SCHALTER:
+        if getattr(x, name):
+            try:
+                print(schalten(name, getattr(x, name)))
+            except kit.ConfigFehler as e:
+                sys.exit(str(e))
+            return
     if not x.nachziehen and (x.neu_config or not os.path.exists(kit.CONFIG)):
         fehlt = [n for n in (() if x.web_adresse else ("person", "telegram_id", "assistent", "admin"))
                  if not getattr(x, n)]
@@ -346,6 +417,8 @@ def main():
     if x.nachziehen:   # neue Fassung des Kits: unveränderte Vorlagen in home/ mitziehen
         neu = home_nachziehen(werte(cfg), bool(cfg["google"]["konto"])) \
             if os.path.isfile(os.path.join(kit.HOME_DIR, "CLAUDE.md")) else []
+        if neu is not None and os.path.isfile(os.path.join(kit.HOME_DIR, "CLAUDE.md")):
+            module_nachziehen(cfg)
     else:
         neu = [] if einladung else home_anlegen(werte(cfg), bool(cfg["google"]["konto"]))
     for d in (kit.STATE_DIR, os.path.dirname(kit.SECRETS)):

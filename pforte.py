@@ -14,6 +14,13 @@ Web App direkt in Telegram, Anmeldungen bei Anbietern und Google gehen im Browse
   POST /einrichten/fragebogen      {t, antworten} Kennenlern-Fragebogen speichern, die KI meldet sich danach
   POST /einrichten/fragebogen-aus  {t}            Fragebogen überspringen
   POST /einrichten/whatsapp        {t, an}        WhatsApp dazu (der Server baut sofort) oder ohne
+  POST /einrichten/lou             {t, einladung} Lou verbinden: ohne Einladung holt der Server einen Zugang bei Lou
+  POST /einrichten/lou-aus         {t}            Lou aus (Schalter auf der Karte) oder ohne Lou weiter
+
+Lou kommt in der Einrichtung nur vor, wenn sie vorab angehakt ist: Die Seite verbindet Lou dann im Hintergrund und zeigt
+den Schritt Lou nur, wenn das nicht klappt. In den Einstellungen ist Lou ein Schalter.
+  POST /brain/schalten             {t, an}        Kit Brain an oder aus
+  POST /brain/teilen               {t, an}        Ordner Brain in Google Drive teilen oder nicht mehr
   POST /einrichten/fertig          {t}            home/ anlegen, der Assistent stellt sich im Chat vor
   GET  /oauth2callback?...         Rückweg von Google, geht an den Google-Dienst der Instanz
   GET  /whatsapp?t=<wa-link>       WhatsApp verbinden (eigener Link, gilt sieben Tage)
@@ -301,6 +308,8 @@ textarea:focus{outline:none;border-color:var(--vb-blau)}
 padding:0 16px;margin-bottom:12px;cursor:pointer}
 .knopf+.knopf{margin-top:10px}
 .knopf.ohne{background:none;color:var(--vb-grau);margin-top:6px}
+.link{display:block;border:0;background:none;color:var(--vb-blau);font-family:inherit;font-weight:600;font-size:15px;
+padding:14px 0 2px;margin:0 auto;cursor:pointer}
 .knopf.hell{background:#fff;color:var(--vb-blau);margin-top:22px;position:relative;z-index:1}
 .inhalt p{color:var(--vb-grau)}
 @media (prefers-reduced-motion:reduce){.wahl,.schalter i,.schalter i::after{transition:none}.warte{animation:none}}
@@ -333,6 +342,12 @@ ICON = {
               'a2 2 0 0 1-2-2z"/></svg>',
     "paket": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
              'stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
+    "herz": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+            'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 '
+            '7.5 2.6C19.5 15.4 12 20 12 20z"/></svg>',
+    "stapel": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+              'stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12.5 9 5 9-5"/>'
+              '<path d="m3 17 9 5 9-5"/></svg>',
     "kreuz": '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" '
              'stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>',
 }
@@ -367,7 +382,7 @@ def einrichtungsseite(name, bot, einstellungen=False):
         for k, icon, titel, was in (("kalender", "kalender", "Kalender", "Termine und Aufgaben"),
                                     ("mail", "mail", "Mail", "Lesen, Entwürfe, Drive")))
     inhalt = f"""
-<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span><span data-zu="whatsapp">WhatsApp</span><span data-zu="profil">Über dich</span></nav>
+<nav class="fortschritt"><span data-zu="namen">Namen</span><span data-zu="ki">KI</span><span data-zu="google">Kalender und Mail</span><span data-zu="whatsapp">WhatsApp</span><span data-zu="lou">Lou</span><span data-zu="profil">Über dich</span></nav>
 <p class="karte" id="abgelaufen" hidden>Dieser Link ist abgelaufen. Schick deinem Bot /start, dann bekommst du einen neuen.</p>
 <section class="karte stufe" id="s-namen">{kopf("namen", "person", "Namen")}
   <div class="inhalt">
@@ -444,6 +459,31 @@ def einrichtungsseite(name, bot, einstellungen=False):
     <button class="knopf ohne" id="whatsapp-ohne">Ohne WhatsApp weiter</button>
   </div>
 </section>
+<section class="karte stufe" id="s-lou">{kopf("lou", "herz", "Lou")}
+  <div class="inhalt">
+    <p>Lou denkt mit dir über das nach, was dich beschäftigt, mit therapeutischen Techniken. Ihr schreibt im selben Chat,
+    du beginnst mit „Hallo Lou“.</p>
+    <label class="schalter" id="lou-schalter" hidden><span class="kachel">{ICON["sprechblase"]}</span><span><b>Lou</b><small id="lou-schalter-text"></small></span>
+      <input type="checkbox" id="lou-an"><i aria-hidden="true"></i></label>
+    <label id="lou-einladung-teil" hidden>Einladung<input id="lou-einladung" autocomplete="off" autocapitalize="off"
+      spellcheck="false" placeholder="Link oder Code"></label>
+    <p class="fehler" id="lou-fehler" hidden></p>
+    <button class="knopf" id="lou-los">Lou verbinden</button>
+    <button class="link" id="lou-einladung-auf" type="button">Ich habe eine Einladung</button>
+    <button class="knopf ohne" id="lou-ohne">Ohne Lou weiter</button>
+  </div>
+</section>
+<section class="karte stufe offen" id="s-brain" hidden><header><span class="kachel">{ICON["stapel"]}</span><div><b>Brain</b><small id="brain-text"></small></div></header>
+  <div class="inhalt">
+    <label class="schalter"><span class="kachel">{ICON["ordner"]}</span><span><b>Brain</b><small>Themen geordnet in einem eigenen Ordner</small></span>
+      <input type="checkbox" id="brain-an"><i aria-hidden="true"></i></label>
+    <div id="brain-teil" hidden>
+      <p id="brain-hinweis"></p>
+      <button class="knopf leise" id="brain-teilen">In Google Drive teilen</button>
+    </div>
+    <p class="fehler" id="brain-fehler" hidden></p>
+  </div>
+</section>
 <section class="karte stufe" id="s-profil">{kopf("profil", "sprechblase", "Über dich")}
   <div class="inhalt">
     <p>Damit <span class="an">dein Assistent</span> dich von Anfang an kennt.</p>
@@ -495,8 +535,8 @@ def einrichtungsseite(name, bot, einstellungen=False):
 const BOT=__BOT__,ORDNER=__ORDNER__,EINSTELLUNGEN=__EINSTELLUNGEN__,tg=window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData?Telegram.WebApp:null;
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#EFF2F6');tg.setBackgroundColor('#EFF2F6')}catch(e){}}
 let t=new URLSearchParams(location.search).get('t');const $=id=>document.getElementById(id);
-const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','whatsapp','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
-let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false;
+const NAMEN={claude:'Claude',chatgpt:'ChatGPT',gemini:'Gemini'},STUFEN=['namen','ki','google','whatsapp','lou','profil'],FELDER=['wohnort','arbeit','menschen','woche','sonst'];
+let S=null,offen='',zeit=null,googleZeit=null,bearbeitet=false,louGezeigt=false;
 async function stand(){try{const r=await fetch('einrichten/stand?t='+encodeURIComponent(t));return r.ok?r.json():null}catch(e){return null}}
 async function post(pfad,d){try{const r=await fetch(pfad,{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify(Object.assign({t},d))});return await r.json()}catch(e){return{ok:false,fehler:'Die Verbindung ist weg. Versuch es noch einmal.'}}}
@@ -506,6 +546,7 @@ function hat(k){return S.eingerichtet||!S.kits||S.kits.includes(k)}   // vorab g
 function erledigt(){return{namen:!!(S.person&&S.assistent),ki:!!S.anbieter,
   google:!S.google.moeglich||!hat('kalender')||S.google.verbunden||S.google.uebersprungen,
   whatsapp:!S.whatsapp||!S.whatsapp.moeglich||!hat('whatsapp')||!!S.whatsapp.wahl||S.whatsapp.an||S.eingerichtet,
+  lou:S.eingerichtet||!louSchritt()||S.lou.an||!!S.lou.wahl,
   profil:!!(S.fragebogen&&S.fragebogen.erledigt)}}
 function zeichne(){
   if(S.assistent){$('name').textContent=S.assistent;$('zeichen').textContent=S.assistent[0].toUpperCase()}
@@ -513,17 +554,24 @@ function zeichne(){
   $('s-google').hidden=document.querySelector('[data-zu=google]').hidden=!go;
   $('google-app').hidden=!!S.google.app;$('google-konto-teil').hidden=!S.google.app;$('rueckruf').textContent=S.google.rueckruf||'';
   $('s-whatsapp').hidden=document.querySelector('[data-zu=whatsapp]').hidden=!wa;
+  $('s-lou').hidden=document.querySelector('[data-zu=lou]').hidden=!(S.lou&&(S.eingerichtet||louSchritt()));
   const texte={namen:S.person&&S.assistent?S.person+' und '+S.assistent:'',ki:NAMEN[S.anbieter]||'',
     google:S.google.verbunden?S.google.konto:(S.google.uebersprungen?'Ohne Google':''),
     whatsapp:S.whatsapp&&(S.whatsapp.an?'Verbunden':S.whatsapp.wahl==='ja'?'Wird eingerichtet, der QR-Code kommt im Chat':
       S.whatsapp.wahl==='ohne'?'Ohne WhatsApp':'Später im Chat mit /whatsapp')||'',
+    lou:S.lou&&(S.lou.an?'Verbunden':S.eingerichtet?'Aus':S.lou.wahl==='ohne'?'Ohne Lou':'')||'',
     profil:S.fragebogen&&Object.keys(S.fragebogen.antworten||{}).length?'Beantwortet':S.fragebogen&&S.fragebogen.erledigt?'Übersprungen':'Noch offen'};
   document.querySelectorAll('.an').forEach(x=>x.textContent=S.assistent||'dein Assistent');
-  for(const k of STUFEN){const el=$('s-'+k),fertig=(e[k]||S.eingerichtet)&&k!==offen;   // in den Einstellungen ist jeder Bereich offen zum Ändern
-    el.classList.toggle('offen',k===offen);el.classList.toggle('erledigt',fertig);
-    el.querySelector('.aendern').hidden=!fertig||!!zeit;el.querySelector('.erledigt-text').textContent=fertig?texte[k]:'';
+  for(const k of STUFEN){const el=$('s-'+k),karte=karteImmerOffen(k),fertig=!karte&&(e[k]||S.eingerichtet)&&k!==offen;   // in den Einstellungen ist jeder Bereich offen zum Ändern
+    el.classList.toggle('offen',k===offen||karte);el.classList.toggle('erledigt',fertig||(karte&&!!S.lou.an));
+    el.querySelector('.aendern').hidden=!fertig||!!zeit;el.querySelector('.erledigt-text').textContent=fertig||karte?texte[k]:'';
     const n=document.querySelector('[data-zu='+k+']');n.classList.toggle('aktiv',k===offen);n.classList.toggle('fertig',fertig)}
-  wahlZeichnen();if(S.eingerichtet)ablageZeichnen()}
+  wahlZeichnen();louZeichnen();if(S.eingerichtet){ablageZeichnen();brainZeichnen()}}
+function karteImmerOffen(k){return k==='lou'&&S.eingerichtet}   // Lou ist in den Einstellungen eine Karte wie Ablage
+function louSchritt(){   // in der Einrichtung nur, wenn Lou vorab angehakt ist und das Verbinden im Hintergrund scheiterte
+  if(S.lou&&S.kits&&S.kits.includes('lou')&&S.lou.fehler&&!S.lou.an)louGezeigt=true;return louGezeigt}
+function louVorab(){if(S.eingerichtet||!S.kits||!S.kits.includes('lou')||!S.lou||S.lou.an||S.lou.wahl||S.lou.fehler)return;
+  post('einrichten/lou',{}).then(r=>{S.lou=r.lou||Object.assign(S.lou,{fehler:r.ok===false?r.fehler:''});if(S.lou.fehler)zeichne()})}
 function weiter(){
   if(bearbeitet&&S.eingerichtet){offen='';zeichne();return fertig('Gespeichert','Du kannst zurück zu Telegram.')}
   const e=erledigt();offen=STUFEN.find(k=>!e[k])||'';zeichne();if(!offen)abschluss()}
@@ -535,7 +583,7 @@ async function abschluss(){
     if(s&&s.ablage){S.ablage=s.ablage;ablageZeichnen();if(!$('s-ablage').hidden)$('s-ablage').scrollIntoView({behavior:'smooth',block:'start'})}}}
 function fertig(titel,text){clearInterval(zeit);clearInterval(googleZeit);zeit=null;offen='';zeichne();$('fertig-titel').textContent=titel;
   $('fertig-text').textContent=text;$('fertig').hidden=false;
-  for(const k of STUFEN)$('s-'+k).classList.remove('offen');$('fertig').scrollIntoView({behavior:'smooth',block:'center'})}
+  for(const k of STUFEN)if(!karteImmerOffen(k))$('s-'+k).classList.remove('offen');$('fertig').scrollIntoView({behavior:'smooth',block:'center'})}
 function oeffnen(k){bearbeitet=true;offen=k;$('fertig').hidden=true;zeichne();if(k==='ki'){zuruecksetzen();wahlZeichnen()}}
 document.querySelectorAll('.aendern').forEach(b=>b.onclick=()=>oeffnen(b.dataset.schritt));
 $('zu-telegram').onclick=()=>{if(tg)tg.close();else location.href='https://t.me/'+BOT};
@@ -606,6 +654,40 @@ async function whatsappWahl(an){const b=$(an?'whatsapp-ja':'whatsapp-ohne');b.di
   S.whatsapp=Object.assign(S.whatsapp||{},{wahl:an?'ja':'ohne'});weiter()}
 $('whatsapp-ja').onclick=()=>whatsappWahl(true);
 $('whatsapp-ohne').onclick=()=>whatsappWahl(false);
+function louZeichnen(){const l=S.lou||{},karte=!!S.eingerichtet,feld=!$('lou-einladung-teil').hidden&&!l.an;
+  $('lou-schalter').hidden=!karte;$('lou-an').checked=!!l.an;$('lou-schalter-text').textContent=l.an?'Verbunden, im Chat mit „Hallo Lou“':'Aus';
+  $('lou-einladung-teil').hidden=!feld;$('lou-einladung-auf').hidden=!!l.an||feld;
+  $('lou-los').hidden=!!l.an||(karte&&!feld);$('lou-ohne').hidden=karte||!!l.an;fehler('lou-fehler',l.an?'':l.fehler||'')}
+async function louVerbinden(){const b=$('lou-los'),einladung=$('lou-einladung-teil').hidden?'':$('lou-einladung').value.trim();
+  if(S.eingerichtet&&!einladung)return $('lou-einladung').focus();
+  b.disabled=true;b.textContent='Einen Moment …';fehler('lou-fehler','');
+  const r=await post('einrichten/lou',{einladung});b.disabled=false;b.textContent='Lou verbinden';
+  S.lou=Object.assign(S.lou||{},r.lou||{},r.ok===false?{fehler:r.fehler}:{});if(r.ok===false)return louZeichnen();
+  $('lou-einladung').value='';$('lou-einladung-teil').hidden=true;if(S.eingerichtet)zeichne();else weiter()}
+$('lou-los').onclick=louVerbinden;
+$('lou-einladung-auf').onclick=()=>{$('lou-einladung-teil').hidden=false;louZeichnen();$('lou-einladung').focus()};
+$('lou-einladung').addEventListener('paste',()=>setTimeout(()=>{if($('lou-einladung').value.trim().length>=12&&!$('lou-los').disabled)louVerbinden()},60));
+$('lou-einladung').addEventListener('keydown',e=>{if(e.key==='Enter')louVerbinden()});
+$('lou-an').onchange=async()=>{const x=$('lou-an'),an=x.checked;x.disabled=true;fehler('lou-fehler','');
+  $('lou-schalter-text').textContent='Einen Moment …';const r=await post(an?'einrichten/lou':'einrichten/lou-aus',{});x.disabled=false;
+  S.lou=Object.assign(S.lou||{},r.lou||{},r.ok===false?{fehler:r.fehler}:{});zeichne()};
+$('lou-ohne').onclick=async()=>{await post('einrichten/lou-aus',{});S.lou=Object.assign(S.lou||{},{an:false,wahl:'ohne',fehler:''});weiter()};
+function brainZeichnen(){const b=S.brain;$('s-brain').hidden=!b||!S.eingerichtet;if(!b)return;
+  $('brain-an').checked=!!b.an;$('brain-teil').hidden=!b.an;
+  $('brain-text').textContent=!b.an?'Aus':b.teilen?'Geteilt in Google Drive'+(b.zuletzt?', zuletzt '+wann(b.zuletzt):''):'An, nur auf deinem Server';
+  $('brain-teilen').textContent=b.teilen?'Nicht mehr teilen':'In Google Drive teilen';
+  $('brain-hinweis').textContent=b.teilen?'Andere lesen mit, Änderungen im Drive kommen nicht zurück. Freigeben kannst du den Ordner in Google Drive.':
+    b.moeglich?'Der Ordner „'+(b.ordner||'Brain')+'“ kommt in dein Google Drive, jede Nacht neu. Andere lesen mit, Änderungen im Drive kommen nicht zurück.':
+    'Zum Teilen verbinde zuerst Google mit Mail, darin steckt Drive.';
+  fehler('brain-fehler',b.fehler)}
+$('brain-an').onchange=async()=>{const x=$('brain-an'),an=x.checked;x.disabled=true;
+  const r=await post('brain/schalten',{an});x.disabled=false;
+  if(r.ok===false){x.checked=!an;return fehler('brain-fehler',r.fehler)}S.brain=r.brain||S.brain;brainZeichnen()};
+$('brain-teilen').onclick=async()=>{const b=S.brain,k=$('brain-teilen');
+  if(!b.teilen&&!b.moeglich){if(S.google.moeglich)return oeffnen('google');return fehler('brain-fehler','Teilen geht nur über Google Drive, das fehlt auf diesem Server.')}
+  k.disabled=true;k.textContent='Einen Moment …';fehler('brain-fehler','');
+  const r=await post('brain/teilen',{an:!b.teilen});k.disabled=false;
+  if(r.brain)S.brain=r.brain;brainZeichnen();if(r.ok===false)fehler('brain-fehler',r.fehler)};
 function fragebogenFuellen(){const f=S.fragebogen||{antworten:{},hilfe:[],ton:[]},a=f.antworten||{};
   for(const k of FELDER)$('f-'+k).value=a[k]||'';
   chips('f-hilfe',f.hilfe||[],true,a.hilfe||[]);chips('f-ton',f.ton||[],false,a.ton?[a.ton]:[])}
@@ -662,13 +744,13 @@ $('daten-jetzt').onclick=async()=>{const b=$('daten-jetzt');b.disabled=true;b.te
     $('abgelaufen').hidden=false;for(const k of STUFEN)$('s-'+k).hidden=true;document.querySelector('.fortschritt').hidden=true;return}
   $('person').value=S.person||'';$('assistent').value=S.assistent||'';$('konto').value=S.google.konto||'';
   if(S.google.dienste.length)document.querySelectorAll('[data-dienst]').forEach(x=>x.checked=S.google.dienste.includes(x.dataset.dienst));
-  fragebogenFuellen();
+  fragebogenFuellen();louVorab();
   const sprung=new URLSearchParams(location.search).get('wo')||location.hash.slice(1);
   if(S.eingerichtet){document.querySelector('.fortschritt').hidden=true;ablageZeichnen();$('s-daten').hidden=false;
     $('monatlich').checked=!!(S.ablage&&S.ablage.monatlich);
     if(S.ablage&&S.ablage.geraet){geraetZeigen(S.ablage.geraet);ablageBeobachten()}}
+  if(['ablage','daten','lou','brain'].includes(sprung)&&S.eingerichtet){zeichne();return $('s-'+sprung).scrollIntoView({block:'start'})}
   if(STUFEN.includes(sprung)&&S.eingerichtet){oeffnen(sprung);return}
-  if(['ablage','daten'].includes(sprung)&&S.eingerichtet){zeichne();return $('s-'+sprung).scrollIntoView({block:'start'})}
   if(S.eingerichtet){offen='';return zeichne()}
   weiter()})();
 </script>""".replace("__BOT__", json.dumps(bot or "")).replace("__ORDNER__", json.dumps(ICON["ordner"])) \
@@ -902,6 +984,15 @@ def handler_fuer(pforte):
             if self.path == "/einrichten/whatsapp" and "wa_onboarding" in h:
                 f = h["wa_onboarding"](d.get("an") is True)
                 return self.senden(200, {"ok": not f, "fehler": f})
+            if self.path == "/einrichten/lou" and "lou" in h:
+                f = h["lou"](str(d.get("einladung") or "")[:500])
+                return self.senden(200, {"ok": not f, "fehler": f, "lou": h["stand"]().get("lou")})
+            if self.path == "/einrichten/lou-aus" and "lou_aus" in h:
+                f = h["lou_aus"]()
+                return self.senden(200, {"ok": not f, "fehler": f, "lou": h["stand"]().get("lou")})
+            if self.path in ("/brain/schalten", "/brain/teilen") and "brain_schalten" in h:
+                f = h["brain_" + self.path.rsplit("/", 1)[1]](d.get("an") is True)
+                return self.senden(200, {"ok": not f, "fehler": f, "brain": h["stand"]().get("brain")})
             if self.path.startswith(("/ablage/", "/daten/")) and "ablage" in h:
                 f, mehr = h["ablage"](self.path.split("/", 1)[1], d)
                 return self.senden(200, {"ok": not f, "fehler": f, **mehr})

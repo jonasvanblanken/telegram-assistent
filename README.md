@@ -16,12 +16,12 @@ write_files:
     content: |
       TG_TOKEN=<Token von @BotFather>
       EINLADUNG=<32 Hex-Zeichen>
-      AUSSTATTUNG=<vorab gewählte Kits: whatsapp, ablage, kalender mit Komma, oder ohne>
+      AUSSTATTUNG=<vorab gewählte Kits: whatsapp, brain, lou, kalender, ablage mit Komma, oder ohne>
 runcmd:
   - [bash, -c, "git clone -q <dieses Repo> /opt/assistent-quelle && git -C /opt/assistent-quelle checkout -q <Commit> && bash /opt/assistent-quelle/box/selbst.sh"]
 ```
 
-`box/selbst.sh` richtet den Server ohne Rückfragen ein: Pakete, Caddy mit HTTPS über `<ip>.sslip.io` (Ausweich: nip.io), einen Assistenten ohne Betreuer, Wache über den eigenen Bot. Den Fortschritt schreibt es in die Beschreibung des Bots (`⏳ 1/3` bis `3/3`, Fehler mit `⚠️`), fertig ist er, wenn dort „Dein persönlicher Assistent …“ steht. Danach öffnet die Person `https://t.me/<bot>?start=<EINLADUNG>`, tippt auf Starten und richtet Namen und KI ein. Die Einrichtung zeigt nur die vorab gewählten Kits (`[kits] wahl` in der config.toml, fehlt die Zeile: alle), in den Einstellungen lässt sich jedes Kit später dazunehmen. Kalender und Mail laufen über eine Google-App, die die Person auf der Einrichtungsseite in ihrem eigenen Google-Konto anlegt (sechs Schritte mit Links, Client-ID und Schlüssel einfügen, gespeichert in `~/.local/share/assistent/google/client.json`, 600). Ältere eigene Server rüsten den Google-Dienst beim nächsten Update nach. Protokoll: `/var/log/assistent-installation.log`.
+`box/selbst.sh` richtet den Server ohne Rückfragen ein: Pakete, Caddy mit HTTPS über `<ip>.sslip.io` (Ausweich: nip.io), einen Assistenten ohne Betreuer, Wache über den eigenen Bot. Den Fortschritt schreibt es in die Beschreibung des Bots (`⏳ 1/3` bis `3/3`, Fehler mit `⚠️`), fertig ist er, wenn dort „Dein persönlicher Assistent …“ steht. Danach öffnet die Person `https://t.me/<bot>?start=<EINLADUNG>`, tippt auf Starten und richtet Namen und KI ein. Die Einrichtung zeigt nur die vorab gewählten Kits (`[kits] wahl` in der config.toml, fehlt die Zeile: alle), in den Einstellungen lässt sich jedes Kit später dazunehmen. Ist `lou` angehakt, verbindet die Seite Lou während der Einrichtung im Hintergrund, einen Schritt Lou mit „Lou verbinden“ und „Ohne Lou weiter“ zeigt sie nur, wenn das scheitert. Kalender und Mail laufen über eine Google-App, die die Person auf der Einrichtungsseite in ihrem eigenen Google-Konto anlegt (sechs Schritte mit Links, Client-ID und Schlüssel einfügen, gespeichert in `~/.local/share/assistent/google/client.json`, 600). Ältere eigene Server rüsten den Google-Dienst beim nächsten Update nach. Protokoll: `/var/log/assistent-installation.log`.
 
 Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
 
@@ -41,6 +41,7 @@ Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
   anbieter.py                   Claude, ChatGPT, Gemini: Programme, Standardmodelle, Einstellungen
   pforte.py                     Einrichtungsseite (Telegram Web App): Namen, KI-Login, Kalender und Mail, Rückweg von Google
   kit.py, einrichten.py         Config lesen, Instanz anlegen und nachziehen
+  ablage.py, brain.py           Spiegel in Drive, Dropbox oder OneDrive, Brain mit Teilen in Google Drive
   werkzeuge/                    erinnern.py, gedaechtnis-pruefen.py, ablegen.py
   google/                       workspace-mcp mit Bearer-Prüfung
   vorlage/                      CLAUDE.md, Profil, Zeitpläne, settings und mcp
@@ -51,7 +52,7 @@ Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
 /home/a-<kurz>/                 je Person, chmod 700
   assistent/config.toml         Name, Telegram-ID, KI und Modell, Google-Konto und Dienste, Einrichtungsseite
   assistent/home/               was der Assistent weiß: profil/, gedaechtnis/, leben/, jobs/
-  .config/assistent/secrets.env TG_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, GOOGLE_MCP_TOKEN, OPENAI_API_KEY (600)
+  .config/assistent/secrets.env TG_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, GOOGLE_MCP_TOKEN, OPENAI_API_KEY, LOU_CODE (600)
   .local/state/assistent/       Zustand, Schlange, Mitschriften
   .local/share/assistent/       Anmeldungen und Einstellungen von Codex und Gemini, Google-Zugang
 ```
@@ -130,7 +131,7 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 | Log einer Person | `journalctl _UID=$(id -u a-anna) --user-unit assistent -n 50` |
 | Selbsttest | `runuser -u a-anna -- env HOME=/home/a-anna python3 /opt/pearl-kit/assistent.py pruefen` |
 | Neu starten | `systemctl --user -M a-anna@ restart assistent` |
-| Einstellungen | Der Menüknopf „Einstellungen“ neben dem Eingabefeld öffnet `<web>/einstellungen` als Web App. Die Seite weist sich mit Telegrams signiertem `initData` aus (nur das Konto der Person), dann gibt es KI, Kalender und Mail, Ablage (Spiegel per rclone nach Google Drive, Dropbox oder OneDrive, `ablage.py`) und Meine Daten (ZIP in den Chat, auf Wunsch am Ersten jedes Monats). Dropbox und OneDrive erscheinen erst, wenn in `ablage.py` die öffentliche App-Kennung steht |
+| Einstellungen | Der Menüknopf „Einstellungen“ neben dem Eingabefeld öffnet `<web>/einstellungen` als Web App. Die Seite weist sich mit Telegrams signiertem `initData` aus (nur das Konto der Person), dann gibt es KI, Kalender und Mail, WhatsApp, Lou, Brain, Ablage (Spiegel per rclone nach Google Drive, Dropbox oder OneDrive, `ablage.py`) und Meine Daten (ZIP in den Chat, auf Wunsch am Ersten jedes Monats). Dropbox und OneDrive erscheinen erst, wenn in `ablage.py` die öffentliche App-Kennung steht |
 | KI neu anmelden oder wechseln | Die Person schickt `/ki`: Sie wechselt per Antippen zwischen allen verbundenen KIs (`/ki_claude`, `/ki_chatgpt`) oder verbindet eine weitere, `/anmelden` öffnet die Einrichtung, für Kalender und Mail `/google`. Lehnt die KI die Anmeldung ab, bekommt sie den Link von selbst. Beim Wechsel sichert erst die bisherige KI das offene Gespräch, dann beginnt ein neues, das Gedächtnis bleibt |
 | Ohne Domain neu anmelden | Claude: `sudo -u a-anna -i claude setup-token`, Token in `secrets.env` als `CLAUDE_CODE_OAUTH_TOKEN` ersetzen, `CLAUDE_TOKEN_SEIT` auf heute. ChatGPT: `auth.json` in `~/.local/share/assistent/codex/` löschen und `person-anlegen.sh anna` noch einmal. Gemini ebenso mit `gemini/.gemini/oauth_creds.json` |
 | Modell oder Zeiten ändern | Modell, Effort, Rechte: `[ki]` in `config.toml` der Person (leer heißt Standard des Anbieters), dann Neustart. Zeiten: Die Person sagt es dem Assistenten, er ändert seine `jobs/` selbst |
@@ -139,13 +140,25 @@ Danach legt der Dienst ihren Bereich an und der Assistent stellt sich vor. Bleib
 
 **Rechte:** Claude läuft mit `--permission-mode auto`. Lehnt das Abo der Person den Modus ab (Selbsttest scheitert am Claude-Lauf), in `config.toml` `rechte = "dontAsk"` setzen: Dann darf der Assistent nur, was in `settings.json` freigegeben ist, und das reicht für alles im Kit. ChatGPT läuft in der Sandbox von Codex, schreiben darf es nur im Arbeitsordner, ins Netz darf es. Gemini läuft ohne Sandbox mit `--approval-mode yolo`, begrenzt nur durch den Linux-User.
 
-## WhatsApp (Erweiterung)
+## WhatsApp: Stay Close (Erweiterung)
 
 Nur auf dem eigenen Server: Der Assistent bietet es einmal von selbst an (oder die Person schickt `/whatsapp`), eine Seite in Telegram holt die Einwilligung und zeigt den QR-Code, ab dann pflegt der Assistent nachts Notizen zu den Menschen im engen Kreis und schlägt morgens vor, wem sie schreiben könnte, mit einem fertigen Entwurf je Mensch. Aufbau und Hinweise für die Person: `docs/whatsapp.md`.
 
+## Lou
+
+Lou denkt mit der Person über das nach, was sie beschäftigt, im selben Chat und mit eigenen Werkzeugen. Der Assistent leiht Lou die Stimme, sobald die Person „Hallo Lou“ schreibt. Lou steht allen offen: Beim Einschalten holt der Server mit `POST <LOU_URL>/api/zugang` einen eigenen Code für die Person, prüft ihn per `initialize` auf `<LOU_URL>/mcp/<code>` und trägt den Server in `mcp.json` ein, bei ChatGPT und Gemini in deren Einstellungen. Wer eine Einladung hat, fügt Link oder Code unter „Ich habe eine Einladung“ ein. Der Code steht nur in `secrets.env` und `mcp.json`, die Nacht-Sicherung nimmt `mcp.json` nicht mit. `LOU_URL` ist `https://hellolou.app`, abweichend per `ASSISTENT_LOU_URL` in der Umgebung des Dienstes.
+
+- In den Einstellungen ist Lou ein Schalter: an holt einen Code und verbindet, aus nimmt den Server wieder heraus
+- Spricht die Person Lou an, solange Lou aus ist, antwortet der Assistent mit einem Satz und dem Knopf „Lou einschalten“, ein Tipp verbindet sofort
+- Von Hand: `python3 /opt/pearl-kit/einrichten.py --lou an|aus`, „an“ setzt einen vorhandenen `LOU_CODE` voraus
+
+## Brain
+
+Brain legt in `home/brain/` einen geordneten Ordner für die Themen der Person an, mit eigenen Regeln in `brain/REGELN.md`. Profil, Gedächtnis, Leben und WhatsApp bleiben draußen, weil der Ordner geteilt sein kann. Auf der Karte Brain gibt es dazu „In Google Drive teilen“: Der Server spiegelt `home/brain/` jede Nacht in einen Ordner „Brain“ im Google Drive der Person, nur in diese Richtung. Was dort jemand ändert, kommt nicht zurück und wird in der nächsten Nacht überschrieben. Teilen braucht Google mit eingeschalteter Mail, darin steckt Drive. Von Hand: `einrichten.py --brain an|aus`.
+
 ## Stolperfallen
 
-- **Geheimnisse:** Für Claude sperren deny-Regeln `secrets.env` und `config.toml`. Codex und Gemini kennen solche Regeln nicht, sie könnten die Schlüssel der Person lesen. Die bleiben trotzdem in ihrem User, an fremde Instanzen kommen sie nicht
+- **Geheimnisse:** Für Claude sperren deny-Regeln `secrets.env`, `config.toml` und `mcp.json` (darin steht der Lou-Code). Codex und Gemini kennen solche Regeln nicht, sie könnten die Schlüssel der Person lesen. Die bleiben trotzdem in ihrem User, an fremde Instanzen kommen sie nicht
 - **Codex-Sandbox:** Scheitert der ChatGPT-Lauf im Selbsttest an der Sandbox (Fehler mit `landlock`, `bwrap` oder `sandbox`), in `config.toml` `rechte = "voll"` setzen
 - **ChatGPT-Anmeldung per Code:** Lehnt OpenAI den Gerätecode ab, muss die Person die Geräte-Anmeldung in ChatGPT unter Einstellungen, Sicherheit einschalten. OpenAI warnt auf der Seite davor, Codes von anderen einzugeben. Das gilt Fremden, hier kommt der Code von der eigenen Einrichtungsseite
 - **Gemini mit Workspace-Konto:** Firmen- und Schulkonten brauchen ein eigenes Google-Cloud-Projekt. Für Gemini deshalb ein privates Google-Konto nehmen, Google für Kalender und Mail darf trotzdem das Firmenkonto sein

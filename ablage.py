@@ -10,6 +10,7 @@ Zugänge holt dieses Modul selbst frisch (Refresh-Token in secrets.env) und gibt
 Access-Token, damit rclone nie selbst erneuern muss. Ein Weg für alle drei Anbieter.
 """
 import base64
+import contextlib
 import datetime
 import glob
 import hashlib
@@ -47,32 +48,47 @@ bei_verbunden = None   # setzt assistent.py: nach dem Verbinden einmal spiegeln 
 
 
 class AblageFehler(Exception):
-    pass
+    """Ein Satz für die Person. technik: Grund von rclone (nur fürs Protokoll), zugang_weg: der Anbieter lässt
+    nicht mehr hinein (401, invalid_grant), die Verbindung muss neu."""
+
+    def __init__(self, text, technik="", zugang_weg=False):
+        super().__init__(text)
+        self.technik = technik
+        self.zugang_weg = zugang_weg
 
 
-def lies():
+def json_lesen(pfad):
     try:
-        with open(STAND, encoding="utf-8") as f:
+        with open(pfad, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
 
 
-def setze(**kw):
+def json_setzen(pfad, **kw):
+    """Werte in einer Zustandsdatei setzen (None entfernt den Schlüssel), Rechte 600. Rückgabe: neuer Zustand."""
     with _lock:
-        st = lies()
+        st = json_lesen(pfad)
         for k, v in kw.items():
             if v is None:
                 st.pop(k, None)
             else:
                 st[k] = v
-        os.makedirs(os.path.dirname(STAND), exist_ok=True)
-        tmp = STAND + ".tmp"
+        os.makedirs(os.path.dirname(pfad), exist_ok=True)
+        tmp = pfad + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False, indent=1)
         os.chmod(tmp, 0o600)
-        os.replace(tmp, STAND)
+        os.replace(tmp, pfad)
         return st
+
+
+def lies():
+    return json_lesen(STAND)
+
+
+def setze(**kw):
+    return json_setzen(STAND, **kw)
 
 
 def angebot(drive_moeglich):
@@ -247,12 +263,12 @@ def ordnername(name):
     return sauber or "Assistent"
 
 
-def spiegeln(home, name):
-    """home/ in den Ordner des Assistenten spiegeln. Wirft AblageFehler mit einem Satz für die Person."""
-    st = lies()
-    ziel = st.get("ziel")
-    if not ziel:
-        return
+@contextlib.contextmanager
+def verbindung(ziel, st=None):
+    """rclone mit frischem Zugang für einen Lauf. Die Konfiguration mit dem Access-Token liegt nur so lange in einem
+    Temp-Ordner, wie der Block läuft. Liefert lauf(*argumente, timeout=3600) -> CompletedProcess, das Ziel heißt
+    darin `ziel:`. st: Zustand mit drive_id und drive_type (OneDrive)."""
+    st = st or {}
     rclone = shutil.which("rclone")
     if not rclone:
         raise AblageFehler("Auf deinem Server fehlt noch ein Programm dafür. Es kommt mit dem nächsten Update von selbst.")
@@ -268,20 +284,48 @@ def spiegeln(home, name):
         conf = os.path.join(tmp, "rclone.conf")
         with open(os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600), "w", encoding="utf-8") as f:
             f.write("\n".join(zeilen) + "\n")
-        befehl = [rclone, "--config", conf, "sync", home, f"ziel:{ordnername(name)}", "--transfers", "4",
-                  "--log-level", "ERROR"]
-        for ordner in AUSSEN_VOR:
-            befehl += ["--exclude", "/" + ordner + "**"]   # mit / nur ab home/, nicht in jeder Tiefe
-        try:
-            r = subprocess.run(befehl, capture_output=True, text=True, timeout=3600)
-        except subprocess.TimeoutExpired:
-            raise AblageFehler(f"Das Spiegeln zu {ZIELE[ziel]} hat zu lange gedauert. Ich versuche es morgen wieder.")
+
+        def lauf(*argumente, timeout=3600):
+            try:
+                return subprocess.run([rclone, "--config", conf, *argumente], capture_output=True, text=True,
+                                      timeout=timeout)
+            except subprocess.TimeoutExpired:
+                raise AblageFehler(f"Das Spiegeln zu {ZIELE[ziel]} hat zu lange gedauert. Ich versuche es morgen wieder.")
+        yield lauf
+
+
+def fehler_aus(ziel, r):
+    """AblageFehler aus einem gescheiterten rclone-Lauf."""
+    grund = (r.stderr or r.stdout).strip()[-300:]
+    if "401" in grund or "invalid_grant" in grund or "unauthorized" in grund.lower():
+        return AblageFehler(f"{ZIELE[ziel]} lässt mich nicht mehr hinein. Verbinde die Ablage bitte neu.", grund, True)
+    return AblageFehler(f"Das Spiegeln zu {ZIELE[ziel]} hat nicht geklappt. Ich versuche es morgen wieder.", grund)
+
+
+def sync(lauf, ziel, quelle, ordner, ausschluesse=()):
+    """Kern des Spiegelns: quelle (Ordner auf dem Server) per rclone sync nach ziel:<ordner>, das Ziel gleicht danach
+    der Quelle. ausschluesse: Ordner relativ zur Quelle, die draußen bleiben. Wirft AblageFehler."""
+    befehl = ["sync", quelle, f"ziel:{ordner}", "--transfers", "4", "--log-level", "ERROR"]
+    for o in ausschluesse:
+        befehl += ["--exclude", "/" + o + "**"]   # mit / nur ab der Quelle, nicht in jeder Tiefe
+    r = lauf(*befehl)
     if r.returncode:
-        grund = (r.stderr or r.stdout).strip()[-300:]
-        setze(fehler_technik=grund)
-        if "401" in grund or "invalid_grant" in grund or "unauthorized" in grund.lower():
-            raise AblageFehler(f"{ZIELE[ziel]} lässt mich nicht mehr hinein. Verbinde die Ablage bitte neu.")
-        raise AblageFehler(f"Das Spiegeln zu {ZIELE[ziel]} hat nicht geklappt. Ich versuche es morgen wieder.")
+        raise fehler_aus(ziel, r)
+
+
+def spiegeln(home, name):
+    """home/ in den Ordner des Assistenten spiegeln. Wirft AblageFehler mit einem Satz für die Person."""
+    st = lies()
+    ziel = st.get("ziel")
+    if not ziel:
+        return
+    try:
+        with verbindung(ziel, st) as lauf:
+            sync(lauf, ziel, home, ordnername(name), AUSSEN_VOR)
+    except AblageFehler as e:
+        if e.technik:
+            setze(fehler_technik=e.technik)
+        raise
     setze(zuletzt=time.time(), fehler=None, fehler_technik=None)
 
 

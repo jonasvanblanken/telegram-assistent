@@ -27,9 +27,13 @@ STANDARD = {"person": {"zeitzone": "Europe/Berlin", "sprache": "de"},
             "google": {"konto": "", "port": 0, "dienste": "kalender,mail"},
             "web": {"adresse": "", "port": 0},
             "whatsapp": {"status": "aus"},   # an: Erweiterung eingerichtet (nur eigener Server, /whatsapp im Chat)
+            "lou": {"status": "aus"},        # an: Lou verbunden, der Zugang steht als LOU_CODE in secrets.env
+            "brain": {"status": "aus"},      # an: Themen geordnet in home/brain/ (brain.py)
             "kits": {"wahl": ""}}   # vorab gewählte Kits, leer = alle anbieten (Betreuer-Box, ältere Server)
 ANBIETER = ("claude", "chatgpt", "gemini")
-KITS = ("kalender", "whatsapp", "ablage")   # Kits, die die Person schon vor der Einrichtung wählen kann
+KITS = ("kalender", "whatsapp", "ablage", "lou", "brain")   # Kits, die die Person schon vor der Einrichtung wählen kann
+SCHALTER = ("whatsapp", "lou", "brain")   # Kits mit [<kit>] status = "an" | "aus"
+LOU_STANDARD = "https://hellolou.app"   # Lous Kern läuft dort, der Assistent kennt nur die Adresse mit seinem Zugang
 KITS_OHNE = "ohne"   # [kits] wahl, wenn sie keins gewählt hat
 RECHTE = {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}   # Claude: --permission-mode
 RECHTE_ANDERE = {"auto", "voll"}
@@ -73,8 +77,9 @@ def lies_config(pfad=CONFIG):
     erlaubt = RECHTE if ki["anbieter"] in ("", "claude") else RECHTE_ANDERE
     if ki["rechte"] not in erlaubt | {"auto"}:
         raise ConfigFehler(f"[ki] rechte muss eins von {', '.join(sorted(erlaubt))} sein")
-    if cfg["whatsapp"]["status"] not in ("an", "aus"):
-        raise ConfigFehler('[whatsapp] status muss "an" oder "aus" sein')
+    for k in SCHALTER:
+        if cfg[k]["status"] not in ("an", "aus"):
+            raise ConfigFehler(f'[{k}] status muss "an" oder "aus" sein')
     if kits_gewaehlt(cfg["kits"]["wahl"]) is False:
         raise ConfigFehler(f'[kits] wahl muss leer, "{KITS_OHNE}" oder eine Liste aus {", ".join(KITS)} sein')
     if cfg["web"]["adresse"]:
@@ -148,14 +153,20 @@ def lies_secrets(pfad=SECRETS):
     return out
 
 
+def lou_url():
+    """Adresse von Lou, ASSISTENT_LOU_URL nur für Tests."""
+    return (os.environ.get("ASSISTENT_LOU_URL") or LOU_STANDARD).rstrip("/")
+
+
 def setze_secret(name, wert, pfad=SECRETS):
-    """Zeile in secrets.env ersetzen oder anhängen, Rechte 600."""
+    """Zeile in secrets.env ersetzen oder anhängen, Rechte 600. wert None: Zeile entfernen."""
     zeilen = []
     try:
         zeilen = [z for z in open(pfad, encoding="utf-8").read().splitlines() if not z.startswith(f"{name}=")]
     except OSError:
         os.makedirs(os.path.dirname(pfad), mode=0o700, exist_ok=True)
-    zeilen.append(f"{name}={wert}")
+    if wert is not None:
+        zeilen.append(f"{name}={wert}")
     tmp = pfad + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(zeilen) + "\n")

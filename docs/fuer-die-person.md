@@ -23,9 +23,15 @@ Danach stellt sich dein Assistent im Chat vor. Das Ganze dauert drei Minuten.
 - Morgens um halb acht kommt eine kurze Nachricht. Ist dir die Zeit zu früh oder willst du abends nichts hören, sag es ihm einfach
 - Er schickt nie selbst Mails. Er legt Entwürfe an, abschicken tust du
 - Passwörter, PINs und TANs gehören nicht in den Chat
-- Der Knopf „Einstellungen“ neben dem Eingabefeld öffnet eine Seite: dort wechselst du die KI, schaltest Kalender und Mail dazu, legst eine Kopie deiner Daten in Dropbox, OneDrive oder Google Drive oder holst dir alles als Datei in den Chat
+- Der Knopf „Einstellungen“ neben dem Eingabefeld öffnet eine Seite: dort wechselst du die KI, schaltest Kalender, Mail, Lou und Brain dazu, legst eine Kopie deiner Daten in Dropbox, OneDrive oder Google Drive oder holst dir alles als Datei in den Chat
 - `/status` zeigt, woran er gerade ist
+
+## Lou und Brain
+
+Lou denkt mit dir über das nach, was dich gerade beschäftigt. Ihr schreibt im selben Chat, du beginnst mit „Hallo Lou“, und Lou bleibt, bis ihr fertig seid. Hast du Lou bei der Bestellung angehakt, ist Lou von Anfang an verbunden. Sonst schaltest du Lou unter Einstellungen ein, oder du schreibst einfach „Hallo Lou“ und tippst auf „Lou einschalten“.
+
+Brain ordnet deine Themen in einem eigenen Ordner, dein Assistent pflegt ihn mit. Unter Einstellungen kannst du ihn mit „In Google Drive teilen“ in dein Google Drive legen, jede Nacht kommt dort eine frische Kopie an. Was du im Drive-Ordner änderst, sieht dein Assistent nicht, und in der Nacht danach steht dort wieder sein Stand.
 
 ## Wer was sieht
 
-Was ihr schreibt, liegt auf einem Server in Deutschland, in einem Bereich, der nur deinem Assistenten gehört. Ich betreue die Technik und lese nicht mit. Die Gespräche laufen über die KI, die du gewählt hast (Anthropic, OpenAI oder Google), und, wenn du es willst, über dein Google-Konto. Willst du aufhören, sag Bescheid: Du bekommst alles, was er weiß, als Datei, danach lösche ich es.
+Was ihr schreibt, liegt auf einem Server in Deutschland, in einem Bereich, der nur deinem Assistenten gehört. Ich betreue die Technik und lese nicht mit. Die Gespräche laufen über die KI, die du gewählt hast (Anthropic, OpenAI oder Google), und, wenn du es willst, über dein Google-Konto. Redest du mit Lou, läuft das Gespräch zusätzlich über Lous Server. Willst du aufhören, sag Bescheid: Du bekommst alles, was er weiß, als Datei, danach lösche ich es.

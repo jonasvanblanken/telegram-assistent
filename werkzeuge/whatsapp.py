@@ -7,6 +7,7 @@
     whatsapp.py chats  [--anzahl N]         Direktchats mit Namen und letzter Aktivität (um den Kreis festzulegen)
     whatsapp.py lies "<Name>" [--tage N]    ein Direktchat, nur wenn die Person ausdrücklich danach fragt
     whatsapp.py einrichten                  nach der Verknüpfung: Token, Ordner whatsapp/, Zeitpläne, config
+    whatsapp.py nachziehen                  Kit-eigene Dateien in whatsapp/ erneuern (nach einem Update), Notizen bleiben
     whatsapp.py abschalten                  Zeitpläne und Token weg, config aus; die Notizen in whatsapp/ bleiben
 
 Der Server (box/whatsapp.sh) betreibt eine WhatsApp-Bridge als verknüpftes Gerät und einen rein lesenden Connector
@@ -398,6 +399,31 @@ def secrets_setzen(name, wert):
     os.replace(tmp, pfad)
 
 
+def rendern(text, werte):
+    for k, v in werte.items():
+        text = text.replace("{{" + k + "}}", v)
+    return text
+
+
+def vorlage_text(rel, werte):
+    """Eine Datei aus vorlage/whatsapp/, Platzhalter ersetzt. Bleibt einer übrig, fehlt ein Wert: lieber abbrechen
+    als eine halbe Anweisung nach home/ schreiben."""
+    text = rendern(open(os.path.join(VORLAGE, rel), encoding="utf-8").read(), werte)
+    rest = re.search(r"\{\{[A-Z_]+\}\}", text)
+    if rest:
+        raise RuntimeError(f"vorlage/whatsapp/{rel}: kein Wert für {rest.group(0)}")
+    return text
+
+
+def schreib_text(ziel, text):
+    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    tmp = ziel + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ziel)
+
+
 def kopiere_vorlage(werte):
     """vorlage/whatsapp/ nach home/whatsapp/ und die Zeitpläne nach home/jobs/, Vorhandenes bleibt."""
     neu = []
@@ -413,15 +439,96 @@ def kopiere_vorlage(werte):
             ziel = os.path.join(BRAIN, rel)
         if os.path.exists(ziel):
             continue
-        text = open(quelle, encoding="utf-8").read()
-        for k, v in werte.items():
-            text = text.replace("{{" + k + "}}", v)
-        os.makedirs(os.path.dirname(ziel), exist_ok=True)
-        with open(ziel, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chmod(ziel, 0o600)
+        schreib_text(ziel, rendern(open(quelle, encoding="utf-8").read(), werte))
         neu.append(os.path.relpath(ziel, kit.HOME_DIR))
     return neu
+
+
+def grundwerte(cfg, jetzt):
+    import einrichten as e
+    return {**e.werte(cfg), "PERSON": cfg["person"]["name"] or "die Person", "HEUTE": jetzt.date().isoformat()}
+
+
+# Kit-eigen: gehören dem Kit, nicht der Person, und werden bei jedem Update erneuert. Alles andere in whatsapp/
+# (Notizen, Sweep-State, Report, heute.md, kontakte.md) schreibt die KI und bleibt.
+KIT_EIGEN = ("verfahren.md", "CLAUDE.md", os.path.join("personen", "_vorlage.md"))
+JOBS_TEXT = ("whatsapp-nacht.md", "whatsapp-morgen.md")   # nur der Text unter dem Kopf, Zeit und Modell bleiben
+NEUE_KONTAKTE = re.compile(r"^## Neue Kontakte[ \t]*\n(?:[ \t]*\n)*[ \t]*(an|aus)[ \t]*$", re.M)
+EINGESCHALTET = re.compile(r"Eingeschaltet am (\d{4}-\d{2}-\d{2})")
+
+
+def kopf_und_text(text):
+    """Frontmatter (mit beiden ---) und Rest. Ohne Frontmatter: ("", text)."""
+    if text.startswith("---\n"):
+        ende = text.find("\n---\n", 3)
+        if ende != -1:
+            return text[:ende + 5], text[ende + 5:]
+    return "", text
+
+
+def nachziehen():
+    """Nach einem Update des Kits: die Kit-eigenen Dateien in home/whatsapp/ auf den Stand der Vorlage bringen.
+    In CLAUDE.md bleiben der Schalter unter „Neue Kontakte“ und das Datum „Eingeschaltet am“. kontakte.md entsteht,
+    wenn es sie noch nicht gibt, dem Report fehlende Abschnitte werden ergänzt. Bei den Zeitplänen whatsapp-nacht und
+    whatsapp-morgen wird nur der Text erneuert, der Kopf bleibt. Was die KI geschrieben hat, bleibt. Mehrfach
+    aufrufbar, ändert beim zweiten Mal nichts."""
+    if not os.path.isdir(BRAIN):
+        print("WhatsApp ist nicht eingerichtet, nichts nachzuziehen")
+        return 0
+    try:
+        cfg = kit.lies_config()
+    except kit.ConfigFehler as e:
+        print(f"FAILED: {e}")
+        return 2
+    werte = grundwerte(cfg, datetime.datetime.now().astimezone())
+    geaendert = []
+
+    def setze(ziel, text):
+        try:
+            alt = open(ziel, encoding="utf-8").read()
+        except FileNotFoundError:
+            alt = None
+        if alt != text:
+            schreib_text(ziel, text)
+            geaendert.append(os.path.relpath(ziel, kit.HOME_DIR))
+
+    for rel in KIT_EIGEN:
+        ziel = os.path.join(BRAIN, rel)
+        if rel != "CLAUDE.md":
+            setze(ziel, vorlage_text(rel, werte))
+            continue
+        try:
+            alt = open(ziel, encoding="utf-8").read()
+        except FileNotFoundError:
+            alt = ""
+        datum = EINGESCHALTET.search(alt)
+        neu = vorlage_text(rel, {**werte, "HEUTE": datum.group(1) if datum else werte["HEUTE"]})
+        schalter, stelle = NEUE_KONTAKTE.search(alt), NEUE_KONTAKTE.search(neu)
+        if schalter and stelle:
+            neu = neu[:stelle.start(1)] + schalter.group(1) + neu[stelle.end(1):]
+        setze(ziel, neu)
+
+    kontakte = os.path.join(BRAIN, "kontakte.md")
+    if not os.path.exists(kontakte):
+        setze(kontakte, vorlage_text("kontakte.md", werte))
+
+    try:
+        report = open(REPORT_MD, encoding="utf-8").read()
+    except FileNotFoundError:
+        report = None
+    if report is not None and "## Bereich unklar" not in report and "\n## Nicht transkribiert" in report:
+        setze(REPORT_MD, report.replace("\n## Nicht transkribiert", "\n## Bereich unklar\n\n## Nicht transkribiert", 1))
+
+    for name in JOBS_TEXT:
+        ziel = os.path.join(kit.HOME_DIR, "jobs", name)
+        if not os.path.exists(ziel):
+            continue   # abgeschaltet oder vom Morgen-Check übernommen: nicht neu anlegen
+        kopf, _ = kopf_und_text(open(ziel, encoding="utf-8").read())
+        neu_kopf, neu_text = kopf_und_text(vorlage_text(os.path.join("jobs", name), werte))
+        setze(ziel, (kopf or neu_kopf) + neu_text)
+
+    print("WhatsApp nachgezogen: " + ", ".join(geaendert) if geaendert else "WhatsApp ist auf dem Stand des Kits")
+    return 0
 
 
 def einrichten():
@@ -436,9 +543,7 @@ def einrichten():
     secrets_setzen("WHATSAPP_MCP_TOKEN", t)
     cfg = kit.lies_config()
     jetzt = datetime.datetime.now().astimezone()
-    import einrichten as e
-    werte = {**e.werte(cfg), "PERSON": cfg["person"]["name"] or "die Person",
-             "HEUTE": jetzt.date().isoformat(),
+    werte = {**grundwerte(cfg, jetzt),
              "START": str(int(time.time()) - ERSTER_RUECKBLICK * 86400),
              "KREIS_DATUM": (jetzt + datetime.timedelta(minutes=3)).strftime("%Y-%m-%d"),
              "KREIS_ZEIT": (jetzt + datetime.timedelta(minutes=3)).strftime("%H:%M")}
@@ -455,8 +560,7 @@ def einrichten():
         kennt = False
     ersatz = os.path.join(kit.HOME_DIR, "jobs", "whatsapp-morgen.md")
     if not kennt and not os.path.exists(ersatz):   # Morgen-Check geändert: eigener kleiner Lauf für die Vorschläge
-        shutil.copy(os.path.join(VORLAGE, "jobs", "whatsapp-morgen.md"), ersatz)
-        os.chmod(ersatz, 0o600)
+        schreib_text(ersatz, vorlage_text(os.path.join("jobs", "whatsapp-morgen.md"), werte))
         neu.append(os.path.relpath(ersatz, kit.HOME_DIR))
     print("WhatsApp eingerichtet" + (f", neu: {', '.join(sorted(neu))}" if neu else ""))
     return 0
@@ -494,6 +598,7 @@ def main():
     li.add_argument("name")
     li.add_argument("--tage", type=int, default=7)
     sub.add_parser("einrichten")
+    sub.add_parser("nachziehen")
     sub.add_parser("abschalten")
     a = ap.parse_args()
     try:
@@ -507,6 +612,8 @@ def main():
             return lies(a.name, min(max(a.tage, 1), 60))
         if a.cmd == "einrichten":
             return einrichten()
+        if a.cmd == "nachziehen":
+            return nachziehen()
         if a.cmd == "abschalten":
             return abschalten()
         return status()

@@ -11,7 +11,8 @@
       "Edit({{HOME}}/**)",
       "Write({{HOME}}/**)",
       "Bash(python3 {{KIT}}/werkzeuge/*)",
-      "mcp__google"
+      "mcp__google",
+      "mcp__lou"
     ],
     "deny": [
       "Read(~/.config/**)",
@@ -21,6 +22,8 @@
       "Read(~/.profile)",
       "Read({{INSTANZ}}/config.toml)",
       "Read({{INSTANZ}}/google.env)",
+      "Read({{INSTANZ}}/mcp.json)",
+      "Read({{DATEN}}/**)",
       "Read(/etc/pearl-kit/**)",
       "Read(**/.env)",
       "Read(**/.env.*)",

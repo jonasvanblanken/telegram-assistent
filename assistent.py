@@ -101,7 +101,7 @@ RECHTE = CFG["ki"].get("rechte") or "auto"   # Claude: --permission-mode, ChatGP
 KI_ANBIETER = KI_NAME = CHAT_MODELL = KLEIN_MODELL = CHAT_EFFORT = ""   # setzt ki_setzen()
 MODELLE = ()                     # Ausweichen am Abo-Limit nur zwischen Chat- und Klein-Modell
 KIND_ENV = ("GOOGLE_MCP_TOKEN",)                         # nur diese Schlüssel sieht die KI (für den Google-Dienst)
-GEHEIM = re.compile(r"(\.config/|\.ssh/|\.credentials|\.env\b|\.bashrc|\.profile|/etc/pearl-kit|config\.toml)")
+GEHEIM = re.compile(r"(\.config/|\.ssh/|\.credentials|\.env\b|\.bashrc|\.profile|/etc/pearl-kit|config\.toml|mcp\.json|\.gemini/)")
 LIMIT = re.compile(r"hit your (?:\w+ )?limit|exhausted your (?:\w+ )?(?:quota|capacity)|quota exceeded|"
                    r"RESOURCE_EXHAUSTED|usage limit reached|rate limit exceeded", re.I)
 GESPERRT = "GESPERRT: KI-Kontingent aufgebraucht"
@@ -238,7 +238,7 @@ def einrichten_hinweis(immer=False, wo=""):
 anmelden_hinweis = einrichten_hinweis   # alter Name
 
 BEREICHE = {"ki": "KI wechseln", "kalender": "Kalender und Mail", "ablage": "Ablage", "daten": "Meine Daten",
-            "profil": "Über dich", "whatsapp": "WhatsApp"}   # [einstellungen: <bereich>] in Antworten der KI
+            "profil": "Über dich", "whatsapp": "WhatsApp", "lou": "Lou", "brain": "Brain"}   # [einstellungen: <bereich>] in Antworten der KI
 
 
 def einstellungen_link(bereich=""):
@@ -347,9 +347,11 @@ _ablage_lauf = threading.Lock()
 
 def ablage_faellig(st, t):
     a = ablage.lies()
-    nacht = a.get("ziel") and (t.hour, t.minute) >= (TAGESWECHSEL, 30) and st.get("gespiegelt") != t.date().isoformat()
+    spaet, heute = (t.hour, t.minute) >= (TAGESWECHSEL, 30), t.date().isoformat()
+    nacht = a.get("ziel") and spaet and st.get("gespiegelt") != heute
     monat = a.get("monatlich") and t.day == 1 and t.hour >= 9 and st.get("zip_monat") != t.strftime("%Y-%m")
-    return bool(nacht or monat)
+    brain = spaet and st.get("brain_gespiegelt") != heute and kit_status("brain") == "an"
+    return bool(nacht or monat or brain)
 
 
 def ablage_nachts(t):
@@ -368,6 +370,9 @@ def ablage_nachts(t):
                 log(f"Ablage: {e}")
                 if a.get("fehler") != str(e):
                     sende_knopf(str(e), "Ablage", einstellungen_link("ablage")) if WEB else sende_text(str(e))
+        if kit_status("brain") == "an" and st.get("brain_gespiegelt") != t.date().isoformat():
+            update(brain_gespiegelt=t.date().isoformat())
+            brain_spiegeln(st.get("brain_fehler"))
         if a.get("monatlich") and t.day == 1 and t.hour >= 9 and st.get("zip_monat") != t.strftime("%Y-%m"):
             update(zip_monat=t.strftime("%Y-%m"))
             f = daten_senden()
@@ -377,6 +382,219 @@ def ablage_nachts(t):
         log(f"Ablage im Zeitplan: {type(e).__name__}: {e}")
     finally:
         _ablage_lauf.release()
+
+
+# --- Kits Lou und Brain ----------------------------------------------------------
+# Lou läuft bei hellolou.app, der Assistent kennt nur die Adresse mit dem Zugang (LOU_CODE in secrets.env, daraus
+# schreibt einrichten.technik() den MCP-Server lou). Brain (brain.py) hält Themen in home/brain/ und teilt sie auf
+# Wunsch als Ordner in Google Drive, nur in diese Richtung.
+
+LOU_CODE_MUSTER = re.compile(r"(?:einrichten|mcp|k)/([A-Za-z0-9_-]{12,64})")   # wie codeAusEingabe in der Lou-App
+LOU_CODE_NACKT = re.compile(r"[A-Za-z0-9_-]{12,64}")
+LOU_WEG = "Lou ist gerade nicht erreichbar. Versuch es gleich noch einmal."
+LOU_HALLO = "Lou ist auch da, schreib „Hallo Lou“, wenn du mit Lou reden magst."
+LOU_EIN = "Lou einschalten"   # Knopf im Chat, den die KI setzt, wenn Lou aus ist (CLAUDE.md, Werkzeuge)
+BRAIN_START = "Brain ist an. Sag mir, welches Thema ich als Erstes ablegen soll."
+
+
+def kit_status(name):
+    try:
+        return kit.lies_config()[name]["status"]
+    except (kit.ConfigFehler, KeyError):
+        return "aus"
+
+
+def _brain():
+    """Kit Brain, None in einer Fassung des Kits ohne brain.py."""
+    try:
+        import brain
+        return brain
+    except ImportError:
+        return None
+
+
+def kit_neu_lesen(grund):
+    """Nach Lou oder Brain an/aus: neues Gespräch, denn ein fortgesetztes liest CLAUDE.md nicht neu."""
+    notiere("System", grund)
+    if load().get("sitzung"):
+        einreihen("wechsel", grund)
+
+
+def lou_code_aus(eingabe):
+    m = LOU_CODE_MUSTER.search(eingabe)
+    if m:
+        return m.group(1)
+    return eingabe if LOU_CODE_NACKT.fullmatch(eingabe) else ""
+
+
+def lou_zugang_holen(warten=20):
+    """Neuen Zugang bei Lou holen (POST /api/zugang). Rückgabe: Code oder ''."""
+    try:
+        r = requests.post(f"{kit.lou_url()}/api/zugang", json={}, timeout=warten, headers={"accept": "application/json"})
+        code = str((r.json() or {}).get("code") or "") if r.status_code == 200 else ""
+    except (requests.RequestException, ValueError, AttributeError) as e:
+        log(f"Lou: kein Zugang geholt ({type(e).__name__})")
+        return ""
+    if not LOU_CODE_NACKT.fullmatch(code):
+        log(f"Lou: kein Zugang geholt (HTTP {r.status_code})")
+        return ""
+    return code
+
+
+def lou_pruefen(code, warten=20):
+    """initialize gegen Lous MCP-Server. Rückgabe: ok, unbekannt (401: Lou kennt den Code nicht) oder weg."""
+    try:
+        r = requests.post(f"{kit.lou_url()}/mcp/{code}", timeout=warten,
+                          headers={"accept": "application/json, text/event-stream"},
+                          json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                                           "clientInfo": {"name": "assistent", "version": "1"}}})
+    except requests.RequestException as e:
+        log(f"Lou nicht erreicht ({type(e).__name__})")
+        return "weg"
+    if r.status_code in (401, 403, 404):
+        return "unbekannt"
+    if not r.ok:
+        log(f"Lou antwortet mit HTTP {r.status_code}")
+    return "ok" if r.ok else "weg"
+
+
+def lou_verbinden(eingabe="", warten=20):
+    """Lou einschalten. Ohne Eingabe holt der Server einen Zugang bei Lou (vorab angehakt, Schalter, Knopf im Chat),
+    mit Eingabe gilt die eingefügte Einladung (Link oder Code). Erst nach der Prüfung steht der Code in secrets.env.
+    Rückgabe: Fehlertext oder ''."""
+    eingabe = " ".join(str(eingabe or "").split())
+    if eingabe:
+        code = lou_code_aus(eingabe)
+        if not code:
+            return "Das sieht nicht nach einer Einladung aus. Kopier den Link oder Code noch einmal."
+        f = {"unbekannt": "Diese Einladung kennt Lou nicht. Kopier den Link noch einmal.", "weg": LOU_WEG}.get(
+            lou_pruefen(code, warten), "")
+    else:
+        code = lou_zugang_holen(warten)
+        f = "" if code and lou_pruefen(code, warten) == "ok" else LOU_WEG
+    if f:
+        update(lou_fehler=f)
+        return f
+    alt = werte_alt() if eingerichtet() else None
+    kit.setze_secret("LOU_CODE", code)
+    kit.setze_config("lou", "status", "an")
+    einrichten.technik(kit.lies_config())
+    update(lou_wahl="ja", lou_fehler=None)
+    log("Lou verbunden")
+    if alt:
+        einrichten.home_umschalten(alt[0], einrichten.werte(kit.lies_config()), alt[1])
+        kit_neu_lesen("Lou verbunden")
+        sende_text("Lou ist verbunden. Schreib „Hallo Lou“, wenn du mit Lou reden magst.")
+    return ""
+
+
+def lou_aus():
+    """„Ohne Lou weiter“ im Schritt, „Lou trennen“ auf der Karte: Zugang weg, Lou aus. Rückgabe: ''."""
+    an = kit_status("lou") == "an" or bool(secret("LOU_CODE"))
+    alt = werte_alt() if eingerichtet() else None
+    kit.setze_config("lou", "status", "aus")
+    kit.setze_secret("LOU_CODE", None)
+    update(lou_wahl="ohne", lou_fehler=None)
+    if an:
+        einrichten.technik(kit.lies_config())
+        log("Lou getrennt")
+        if alt:
+            einrichten.home_umschalten(alt[0], einrichten.werte(kit.lies_config()), alt[1])
+            kit_neu_lesen("Lou getrennt")
+    return ""
+
+
+def lou_knopf(text):
+    """Knopf „Lou einschalten“ im Chat: Lou verbinden, ohne den Chat zu verlassen. Rückgabe: war es dieser Knopf?"""
+    if text != LOU_EIN or not eingerichtet():
+        return False
+    notiere(PERSON, text)
+    if kit_status("lou") == "an":
+        sende_text("Lou ist schon verbunden. Schreib „Hallo Lou“, wenn du mit Lou reden magst.")
+        return True
+
+    def verbinden():
+        f = lou_verbinden()
+        if f:
+            sende_knopf(f, "Lou", einstellungen_link("lou")) if WEB else sende_text(f)
+    threading.Thread(target=verbinden, daemon=True).start()   # nicht im Abruf von Telegram warten
+    return True
+
+
+def brain_stand():
+    """Für die Seite: Zustand aus brain.py und ob das Kit an ist, None in einer Fassung ohne Brain."""
+    b = _brain()
+    if not b:
+        return None
+    try:
+        z = dict(b.zustand(drive_moeglich()))
+    except Exception as e:   # noqa: BLE001  die Seite soll trotzdem laden
+        log(f"Brain: Zustand nicht gelesen ({type(e).__name__}: {e})")
+        z = {"teilen": False, "moeglich": drive_moeglich(), "ordner": "Brain", "zuletzt": 0, "fehler": ""}
+    return {**z, "an": kit_status("brain") == "an"}
+
+
+def brain_schalten(an):
+    """Schalter Brain auf der Karte. Rückgabe: Fehlertext oder ''."""
+    b = _brain()
+    if not b:
+        return "Brain kommt mit dem nächsten Stand deines Servers."
+    wert = "an" if an else "aus"
+    if kit_status("brain") == wert:
+        return ""
+    alt = werte_alt() if eingerichtet() else None
+    if not an:
+        try:
+            b.teilen(False, drive_moeglich())
+        except ablage.AblageFehler as e:
+            log(f"Brain: Teilen nicht beendet ({e})")
+    kit.setze_config("brain", "status", wert)
+    log(f"Brain {wert}")
+    if alt:
+        cfg = kit.lies_config()
+        if an:
+            b.anlegen(HOME_DIR, einrichten.werte(cfg))
+        einrichten.home_umschalten(alt[0], einrichten.werte(cfg), alt[1])
+        kit_neu_lesen("Brain eingeschaltet" if an else "Brain ausgeschaltet")
+        if an:
+            sende_text(BRAIN_START)
+    return ""
+
+
+def brain_teilen(an):
+    """Knopf „In Google Drive teilen“ (oder wieder nicht). Rückgabe: Fehlertext oder ''."""
+    b = _brain()
+    if not b or kit_status("brain") != "an":
+        return "Schalte zuerst Brain ein."
+    try:
+        b.teilen(bool(an), drive_moeglich())
+    except ablage.AblageFehler as e:
+        return str(e)
+    if eingerichtet():
+        notiere("System", "Brain in Google Drive geteilt" if an else "Brain nicht mehr geteilt")
+        if an:
+            ordner = b.zustand(drive_moeglich()).get("ordner") or "Brain"   # kann „Brain 2“ heißen
+            sende_text(f"Der Ordner „{ordner}“ liegt jetzt in deinem Google Drive, teilen kannst du ihn dort. "
+                       "Jede Nacht kommt eine neue Kopie.")
+    return ""
+
+
+def brain_spiegeln(fehler_vorher):
+    """Nachtlauf: home/brain/ in den geteilten Ordner. Ein neuer Fehler kommt einmal als Nachricht."""
+    b = _brain()
+    if not b:
+        return
+    try:
+        b.spiegeln(HOME_DIR)
+    except ablage.AblageFehler as e:
+        log(f"Brain: {e}")
+        if fehler_vorher != str(e):
+            update(brain_fehler=str(e))
+            sende_knopf(str(e), "Brain", einstellungen_link("brain")) if WEB else sende_text(str(e))
+        return
+    if fehler_vorher:
+        update(brain_fehler=None)
 
 
 OHNE_CODE_GEANTWORTET = set()
@@ -564,9 +782,19 @@ def abschliessen():
         return "Erst die KI anmelden."
     if not PERSON or not NAME:
         return "Erst eure Namen eintragen."
+    lou_fehlt = False
     if not eingerichtet():
+        if KITS and "brain" in KITS and _brain() and kit_status("brain") != "an":   # vorab gewählt
+            kit.setze_config("brain", "status", "an")
+        if KITS and "lou" in KITS and kit_status("lou") != "an" and load().get("lou_wahl") != "ohne":
+            lou_fehlt = bool(lou_verbinden(warten=8))   # vorab angehakt, die Seite hat es nicht geschafft
         cfg = kit.lies_config()
         neu = einrichten.home_anlegen(einrichten.werte(cfg), bool(cfg["google"]["konto"]))
+        if cfg["brain"]["status"] == "an" and (b := _brain()):
+            try:
+                neu += b.anlegen(HOME_DIR, einrichten.werte(cfg))
+            except Exception as e:   # noqa: BLE001  ohne Brain-Vorlage geht die Einrichtung trotzdem zu Ende
+                log(f"Brain nicht angelegt ({type(e).__name__}: {e})")
         log(f"Eingerichtet: {len(neu)} Dateien in home/")
         notiere("System", f"Eingerichtet mit {KI_NAME}" + (", Google " + GOOGLE_KONTO if GOOGLE_KONTO else ""))
     with _lock:
@@ -576,7 +804,12 @@ def abschliessen():
         st["begruesst"] = st.get("begruesst") or time.time()
         save(st)
     if begruessen:
-        sende_text(f"Fertig, {PERSON}. Ich bin {NAME}. " + BEGRUESSUNG)
+        dazu = [t for k, t in (("lou", LOU_HALLO), ("brain", BRAIN_START)) if kit_status(k) == "an"]
+        sende_text(f"Fertig, {PERSON}. Ich bin {NAME}. " + BEGRUESSUNG + ("\n\n" + " ".join(dazu) if dazu else ""))
+    if lou_fehlt:
+        text = "Lou ließ sich gerade nicht verbinden."
+        sende_knopf(text + " Hier geht es mit einem Tipp noch einmal.", "Lou", einstellungen_link("lou")) if WEB else \
+            sende_text(text + f" Tipp später auf „{LOU_EIN}“.", knoepfe=[LOU_EIN])
     return ""
 
 
@@ -714,7 +947,10 @@ def einrichtung_stand():
                        "verbunden": bool(st.get("google_verbunden")), "uebersprungen": bool(st.get("google_uebersprungen")),
                        "app": google_app_da(), "rueckruf": google_weiterleitung()},
             "whatsapp": {"moeglich": wa_moeglich(), "wahl": st.get("wa_onboarding") or "", "an": wa_status() == "an"},
-            "ablage": ablage_stand(), "kits": None if KITS is None else sorted(KITS)}
+            "ablage": ablage_stand(), "kits": None if KITS is None else sorted(KITS),
+            "lou": {"an": kit_status("lou") == "an" and bool(secret("LOU_CODE")), "wahl": st.get("lou_wahl") or "",
+                    "fehler": st.get("lou_fehler") or ""},
+            "brain": brain_stand()}
 
 
 def google_web(query):
@@ -749,7 +985,8 @@ def pforte_starten():
             "fertig": anmeldung_fertig, "google": google_web, "stand": einrichtung_stand, "namen": name_setzen,
             "google_start": google_starten, "google_aus": google_ueberspringen, "google_app": google_app_speichern, "abschliessen": abschliessen,
             "wechseln": ki_wechseln, "fragebogen": fragebogen_speichern,
-            "fragebogen_aus": fragebogen_ueberspringen, "sitzung": webapp_sitzung, "ablage": ablage_aktion, **({"wa_link_gueltig": wa_link_gueltig,
+            "fragebogen_aus": fragebogen_ueberspringen, "sitzung": webapp_sitzung, "ablage": ablage_aktion,
+            "lou": lou_verbinden, "lou_aus": lou_aus, "brain_schalten": brain_schalten, "brain_teilen": brain_teilen, **({"wa_link_gueltig": wa_link_gueltig,
             "wa_stand": wa_seitenstand, "wa_start": wa_seite_start, "wa_onboarding": wa_onboarding}
                                                            if wa_moeglich() else {})})
         log(f"Einrichtungsseite auf 127.0.0.1:{WEB_PORT}" + (f", erreichbar unter {WEB}" if WEB else ""))
@@ -2361,6 +2598,7 @@ def sichern(melden=True):
     try:
         if not os.path.isdir(os.path.join(INSTANZ, ".git")):
             subprocess.run(git + ["init", "-q", "-b", "main"], capture_output=True, timeout=60)
+        subprocess.run(git + ["rm", "-q", "--cached", "--ignore-unmatch", "mcp.json"], capture_output=True, timeout=60)
         subprocess.run(git + ["add", "-A"], capture_output=True, timeout=120)
         subprocess.run(git + ["-c", f"user.name={NAME}", "-c", "user.email=assistent@localhost", "commit", "-qm",
                               f"sicherung: {jetzt():%Y-%m-%d}"], capture_output=True, timeout=120)
@@ -2547,7 +2785,7 @@ def handle(u):
                                                                        "/whatsapp_aus") or \
             re.fullmatch(r"/ki_[a-z]+", text.split()[0].lower().split("@")[0]):
         return befehl(text)
-    if google_rueckruf(text) or wa_antwort(text):
+    if google_rueckruf(text) or wa_antwort(text) or lou_knopf(text):
         return
     try:
         inhalt = als_text(m)

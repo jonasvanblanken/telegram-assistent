@@ -61,8 +61,9 @@ def toml_liste(werte):
     return "[" + ", ".join(json.dumps(w) for w in werte) + "]"
 
 
-def codex_config(home_dir, google_port):
-    """~/.local/share/assistent/codex/config.toml: Sandbox im Arbeitsordner, CLAUDE.md als Anweisung, Google."""
+def codex_config(home_dir, google_port, lou=""):
+    """~/.local/share/assistent/codex/config.toml: Sandbox im Arbeitsordner, CLAUDE.md als Anweisung, Google.
+    lou: Adresse von Lou mit dem Zugang der Person, leer ohne Lou."""
     out = ["# geschrieben von einrichten.py, nicht von Hand ändern",
            'approval_policy = "never"',
            'sandbox_mode = "workspace-write"',
@@ -81,11 +82,13 @@ def codex_config(home_dir, google_port):
                 f'url = "http://127.0.0.1:{google_port}/mcp"',
                 'bearer_token_env_var = "GOOGLE_MCP_TOKEN"',
                 f"disabled_tools = {toml_liste(GOOGLE_GESPERRT)}"]
+    if lou:
+        out += ["", "[mcp_servers.lou]", f"url = {json.dumps(lou)}"]
     return "\n".join(out) + "\n"
 
 
-def gemini_settings(google_port):
-    """~/.local/share/assistent/gemini/.gemini/settings.json: Anmeldung mit Google, CLAUDE.md als Anweisung."""
+def gemini_settings(google_port, lou=""):
+    """~/.local/share/assistent/gemini/.gemini/settings.json: Anmeldung mit Google, CLAUDE.md als Anweisung, Lou."""
     s = {"security": {"auth": {"selectedType": "oauth-personal"}, "folderTrust": {"enabled": False}},
          "context": {"fileName": ["CLAUDE.md"]},
          "privacy": {"usageStatisticsEnabled": False},
@@ -94,4 +97,6 @@ def gemini_settings(google_port):
         s["mcpServers"]["google"] = {"httpUrl": f"http://127.0.0.1:{google_port}/mcp",
                                      "headers": {"Authorization": "Bearer $GOOGLE_MCP_TOKEN"},
                                      "excludeTools": list(GOOGLE_GESPERRT)}
+    if lou:
+        s["mcpServers"]["lou"] = {"httpUrl": lou}
     return s

@@ -1,6 +1,7 @@
 ---
 type: person
 kreis: weiter
+bereich:
 last_contact:
 next_action:
 confidence: mittel

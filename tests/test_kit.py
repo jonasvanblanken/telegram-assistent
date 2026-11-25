@@ -8,6 +8,7 @@ import datetime
 import glob
 import http.server
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -138,7 +140,7 @@ class Instanz:
     def laden(self, telegram_api):
         os.environ.update(self.env)
         os.environ["ASSISTENT_TELEGRAM_API"] = telegram_api
-        for m in ("kit", "ablage", "anbieter", "pforte", "einrichten", "assistent"):
+        for m in ("kit", "ablage", "anbieter", "pforte", "einrichten", "assistent", "brain"):
             sys.modules.pop(m, None)
         return importlib.import_module("assistent")
 
@@ -231,6 +233,7 @@ class Vorlage(unittest.TestCase):
         self.assertIsNone(kit.kits_gewaehlt(""))
         self.assertEqual(kit.kits_gewaehlt("ohne"), set())
         self.assertEqual(kit.kits_gewaehlt("whatsapp, ablage"), {"whatsapp", "ablage"})
+        self.assertEqual(kit.kits_gewaehlt("lou,brain,kalender"), {"lou", "brain", "kalender"})
         self.assertIs(kit.kits_gewaehlt("whatsapp,lotto"), False)
         inst = Instanz(google=False, kits="whatsapp,lotto")   # unbekannt: die Einrichtung läuft, alles wird angeboten
         try:
@@ -1021,10 +1024,370 @@ class Einladung(Chat, unittest.TestCase):
         t = self.binden()
         code, seite = self.holen(f"/einrichten?t={t}")
         self.assertEqual(code, 200)
-        for teil in ("s-namen", "s-ki", "s-google", "telegram-web-app.js", "Ohne Google weiter", '"test_bot"'):
+        for teil in ("s-namen", "s-ki", "s-google", "telegram-web-app.js", "Ohne Google weiter", '"test_bot"',
+                     "s-lou", "Lou verbinden", "Ohne Lou weiter", "Ich habe eine Einladung", ">Einladung<",
+                     "s-brain", "In Google Drive teilen", "louVorab()"):
             self.assertIn(teil, seite)
         self.assertIn('data-anbieter="claude"', seite)
         self.assertNotIn('data-anbieter="gemini"', seite)   # Gemini CLI nimmt seit 18.06.2026 keine privaten Konten
+
+
+class FalscheLou(http.server.BaseHTTPRequestHandler):
+    """Spielt Lou: POST /api/zugang gibt einen Zugang aus, /mcp/<code> antwortet auf initialize, fremde Codes 401."""
+    GUT = "testeinladung-0000"
+    zugang = True       # False: Lou gibt gerade keinen Zugang aus
+    anfragen = []
+
+    def log_message(self, *a):
+        pass
+
+    def antworte(self, code, body):
+        daten = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(daten)))
+        self.end_headers()
+        self.wfile.write(daten)
+
+    def do_POST(self):
+        roh = self.rfile.read(int(self.headers.get("content-length") or 0))
+        FalscheLou.anfragen.append(self.path)
+        if self.path == "/api/zugang":
+            if not FalscheLou.zugang:
+                return self.antworte(503, {"fehler": "gerade nicht"})
+            basis = "http://" + self.headers.get("host", "")
+            return self.antworte(200, {"code": self.GUT, "mcp": f"{basis}/mcp/{self.GUT}",
+                                       "einrichten": f"{basis}/einrichten/{self.GUT}"})
+        if self.path == f"/mcp/{self.GUT}":
+            n = json.loads(roh)
+            return self.antworte(200, {"jsonrpc": "2.0", "id": n.get("id"),
+                                       "result": {"protocolVersion": "2025-03-26", "serverInfo": {"name": "lou"}}})
+        self.antworte(401 if self.path.startswith("/mcp/") else 404, {"fehler": "Kein Zugang"})
+
+
+def falsches_brain(ablage):
+    """Kleines Brain-Modul nach dem Vertrag (anlegen, zustand, teilen, spiegeln), solange brain.py fehlt."""
+    m = types.ModuleType("brain")
+    m.BrainFehler = type("BrainFehler", (ablage.AblageFehler,), {})
+    m.aufrufe, m.geteilt, m.spiegel_fehler = [], False, ""
+
+    def anlegen(home_dir, werte):
+        m.aufrufe.append(("anlegen", werte["PERSON"], werte["BRAIN"]))
+        os.makedirs(os.path.join(home_dir, "brain"), exist_ok=True)
+        with open(os.path.join(home_dir, "brain", "REGELN.md"), "w") as f:
+            f.write("Regeln\n")
+        return [os.path.join("brain", "REGELN.md")]
+
+    def zustand(drive_moeglich):
+        return {"teilen": m.geteilt, "moeglich": drive_moeglich, "ordner": "Brain", "zuletzt": 0.0, "fehler": ""}
+
+    def teilen(an, drive_moeglich):
+        m.aufrufe.append(("teilen", an))
+        if an and not drive_moeglich:
+            raise m.BrainFehler("Zum Teilen verbinde zuerst Google mit Mail, darin steckt Drive.")
+        m.geteilt = an
+
+    def spiegeln(home_dir):
+        m.aufrufe.append(("spiegeln",))
+        if m.spiegel_fehler:
+            raise m.BrainFehler(m.spiegel_fehler)
+
+    m.anlegen, m.zustand, m.teilen, m.spiegeln = anlegen, zustand, teilen, spiegeln
+    return m
+
+
+class LouBasis(Chat):
+    """Instanz mit Einrichtungsseite, falschem Lou-Server (ASSISTENT_LOU_URL) und auf Wunsch falschem Brain."""
+
+    kits, einladung = "", False
+
+    def setUp(self):
+        self.port, self.web, self.lou_port = freier_port(), freier_port(), freier_port()
+        srv = server_starten(self.port)
+        lou = http.server.ThreadingHTTPServer(("127.0.0.1", self.lou_port), FalscheLou)
+        threading.Thread(target=lou.serve_forever, daemon=True).start()
+        FalscheLou.zugang, FalscheLou.anfragen[:] = True, []
+        self.inst = Instanz(google=True, port=self.port, anbieter="", web_port=self.web, kits=self.kits,
+                            einladung=self.einladung)
+        self.inst.env["ASSISTENT_LOU_URL"] = self.lou = f"http://127.0.0.1:{self.lou_port}"
+        self.a = self.inst.laden(f"http://127.0.0.1:{self.port}")
+        self.pf_srv, self.pf = self.a.pforte_starten()
+        os.environ["FAKE_MODUS"] = "ok"
+        FalscherServer.anfragen.clear()
+        self.addCleanup(self.inst.weg)
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(lou.shutdown)
+        self.addCleanup(self.pf_srv.shutdown)
+        self.addCleanup(os.environ.pop, "ASSISTENT_LOU_URL", None)
+        self.addCleanup(sys.modules.pop, "brain", None)
+
+    holen, senden, token = Anmeldeseite.holen, Anmeldeseite.senden, Anmeldeseite.token
+
+    def pfad(self, *teile):
+        return os.path.join(self.inst.env["ASSISTENT_DIR"], *teile)
+
+    def lies(self, pfad):
+        try:
+            return open(pfad, encoding="utf-8").read()
+        except OSError:
+            return ""
+
+    def einrichten_fertig(self):
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")
+        FalscherServer.anfragen.clear()
+
+    def stand(self):
+        roh = self.holen(f"/einrichten/stand?t={self.token()}")[1]
+        self.assertNotIn(FalscheLou.GUT, roh)   # der Zugang geht nie an die Seite
+        return json.loads(roh)
+
+    def brain(self):
+        m = falsches_brain(self.a.ablage)
+        sys.modules["brain"] = m
+        return m
+
+    def pruefe_lou(self, an):
+        secrets_ = self.lies(self.inst.env["ASSISTENT_SECRETS"])
+        mcp = json.load(open(self.pfad("mcp.json")))["mcpServers"]
+        settings = json.load(open(self.pfad("settings.json")))["permissions"]
+        codex = self.lies(os.path.join(self.inst.env["ASSISTENT_DATEN"], "codex", "config.toml"))
+        gemini = json.load(open(os.path.join(self.inst.env["ASSISTENT_DATEN"], "gemini", ".gemini", "settings.json")))
+        gemini = gemini.get("mcpServers") or {}
+        home = self.lies(os.path.join(self.a.HOME_DIR, "CLAUDE.md"))
+        adresse = f"{self.lou}/mcp/{FalscheLou.GUT}"
+        self.assertEqual(f"LOU_CODE={FalscheLou.GUT}" in secrets_, an)
+        self.assertEqual(mcp.get("lou"), {"type": "http", "url": adresse} if an else None)
+        self.assertEqual("google" in mcp, bool(self.a.kit.lies_config()["google"]["konto"]))   # Google bleibt, wie es war
+        self.assertEqual("mcp__lou" in settings["allow"], an)
+        self.assertIn(f"Read({self.a.INSTANZ}/mcp.json)", settings["deny"])
+        self.assertEqual("[mcp_servers.lou]" in codex and adresse in codex, an)
+        self.assertEqual((gemini.get("lou") or {}).get("httpUrl"), adresse if an else None)
+        self.assertEqual(self.a.kit_status("lou"), "an" if an else "aus")
+        if home:
+            self.assertEqual("## Lou" in home and "lou_beginnen" in home, an)
+            self.assertIn("[knopf: Lou einschalten]", home)
+            self.assertNotIn(FalscheLou.GUT, home)
+            self.assertNotIn("<!--", home)
+
+
+
+class LouUndBrain(LouBasis, unittest.TestCase):
+    """Kits Lou und Brain in den Einstellungen: Lou gegen einen falschen Lou-Server, Brain gegen ein falsches Modul."""
+
+    def test_lou_mit_einem_tipp(self):
+        self.einrichten_fertig()
+        self.pruefe_lou(False)
+        self.assertEqual(self.stand()["lou"], {"an": False, "wahl": "", "fehler": ""})
+        self.a.update(sitzung="s-1", tag=self.a.gespraechstag())   # offenes Gespräch: liest CLAUDE.md nicht neu
+        r = self.senden("/einrichten/lou", {"t": self.token()})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["lou"], {"an": True, "wahl": "ja", "fehler": ""})
+        self.assertEqual(FalscheLou.anfragen, ["/api/zugang", f"/mcp/{FalscheLou.GUT}"])
+        self.pruefe_lou(True)
+        self.assertIn("mcp.json", self.lies(self.pfad(".gitignore")))
+        self.assertTrue(glob.glob(os.path.join(self.a.SCHLANGE, "*-wechsel.json")))
+        self.assertTrue(any("Hallo Lou" in x for x in self.gesendet()))
+        self.assertEqual(self.stand()["lou"]["an"], True)
+        self.assertTrue(self.a.sichern(melden=False))   # der Zugang landet nie im Git-Stand
+        r = subprocess.run(["git", "-C", self.a.INSTANZ, "ls-files"], capture_output=True, text=True)
+        self.assertNotIn("mcp.json", r.stdout)
+        # [datei: …] auf mcp.json geht nicht raus
+        self.assertEqual(self.a.dateien_aus(f"[datei: {self.pfad('mcp.json')}]")[1], [])
+        # Schalter aus: Zugang und Server weg
+        r = self.senden("/einrichten/lou-aus", {"t": self.token()})
+        self.assertEqual(r["lou"], {"an": False, "wahl": "ohne", "fehler": ""})
+        self.pruefe_lou(False)
+        self.assertNotIn("LOU_CODE", self.lies(self.inst.env["ASSISTENT_SECRETS"]))
+
+    def test_lou_mit_einladung(self):
+        self.einrichten_fertig()
+        t = self.token()
+        r = self.senden("/einrichten/lou", {"t": t, "einladung": "irgendwas"})
+        self.assertIn("nicht nach einer Einladung", r["fehler"])
+        r = self.senden("/einrichten/lou", {"t": t, "einladung": "testeinladung-9999"})
+        self.assertEqual((r["ok"], r["lou"]["an"]), (False, False))
+        self.assertIn("kennt Lou nicht", r["fehler"])
+        self.pruefe_lou(False)
+        r = self.senden("/einrichten/lou", {"t": t, "einladung": f" https://hellolou.app/einrichten/{FalscheLou.GUT} "})
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("/api/zugang", FalscheLou.anfragen)   # mit Einladung holt der Server keinen neuen Zugang
+        self.pruefe_lou(True)
+        self.assertEqual(self.senden("/einrichten/lou", {"t": "falsch"})["ok"], False)
+
+    def test_lou_nicht_erreichbar(self):
+        self.einrichten_fertig()
+        FalscheLou.zugang = False
+        r = self.senden("/einrichten/lou", {"t": self.token()})
+        self.assertEqual((r["ok"], r["fehler"]), (False, self.a.LOU_WEG))
+        self.assertEqual(self.stand()["lou"]["fehler"], self.a.LOU_WEG)
+        self.pruefe_lou(False)
+        os.environ["ASSISTENT_LOU_URL"] = f"http://127.0.0.1:{freier_port()}"   # niemand da
+        self.assertEqual(self.a.lou_verbinden(), self.a.LOU_WEG)
+        os.environ["ASSISTENT_LOU_URL"] = self.lou
+        FalscheLou.zugang = True
+        self.assertEqual(self.a.lou_verbinden(), "")   # noch einmal: klappt
+        self.assertEqual(self.stand()["lou"]["fehler"], "")
+
+    def test_lou_knopf_im_chat(self):
+        self.einrichten_fertig()
+        self.a.antworte("Lou ist noch aus.\n[knopf: Lou einschalten]")
+        n = [x["daten"] for x in FalscherServer.anfragen if x.get("methode") == "sendMessage"][-1]
+        self.assertEqual(json.loads(n["reply_markup"])["keyboard"], [[{"text": "Lou einschalten"}]])
+        FalscherServer.anfragen.clear()
+        self.nachricht("Lou einschalten")
+        ende = time.time() + 10
+        while time.time() < ende and self.a.kit_status("lou") != "an":
+            time.sleep(0.1)
+        self.pruefe_lou(True)
+        self.assertTrue(any("Lou ist verbunden" in x for x in self.gesendet()))
+        self.assertFalse(glob.glob(os.path.join(self.a.SCHLANGE, "*-msg.json")))   # geht nicht an die KI
+        FalscherServer.anfragen.clear()
+        self.nachricht("Lou einschalten")
+        self.assertTrue(any("schon verbunden" in x for x in self.gesendet()))
+
+    def test_einstellungen_knoepfe(self):
+        for bereich, text in (("lou", "Lou"), ("brain", "Brain")):
+            FalscherServer.anfragen.clear()
+            self.a.antworte(f"Das geht unter Einstellungen.\n[einstellungen: {bereich}]")
+            k = self.knoepfe(1)[-1]
+            self.assertEqual((k[1], k[2]), (text, f"https://box.example.de/test/einstellungen?wo={bereich}"))
+
+    def test_brain_schalten_und_teilen(self):
+        self.einrichten_fertig()
+        b = self.brain()
+        s = self.stand()["brain"]
+        self.assertEqual((s["an"], s["teilen"], s["moeglich"]), (False, False, False))
+        self.assertEqual(self.senden("/brain/teilen", {"t": self.token(), "an": True})["fehler"], "Schalte zuerst Brain ein.")
+        self.a.update(sitzung="s-1", tag=self.a.gespraechstag())
+        r = self.senden("/brain/schalten", {"t": self.token(), "an": True})
+        self.assertTrue(r["ok"] and r["brain"]["an"], r)
+        self.assertEqual(b.aufrufe, [("anlegen", "Mara", "an")])
+        home = self.lies(os.path.join(self.a.HOME_DIR, "CLAUDE.md"))
+        self.assertIn("`brain/REGELN.md`", home)
+        self.assertEqual(self.a.kit_status("brain"), "an")
+        self.assertTrue(any("welches Thema" in x for x in self.gesendet()))
+        self.assertTrue(glob.glob(os.path.join(self.a.SCHLANGE, "*-wechsel.json")))
+        # Teilen braucht Drive
+        r = self.senden("/brain/teilen", {"t": self.token(), "an": True})
+        self.assertEqual(r["ok"], False)
+        self.assertIn("Drive", r["fehler"])
+        self.a.update(google_verbunden=time.time())
+        FalscherServer.anfragen.clear()
+        r = self.senden("/brain/teilen", {"t": self.token(), "an": True})
+        self.assertTrue(r["ok"] and r["brain"]["teilen"] and r["brain"]["moeglich"], r)
+        self.assertTrue(any("Google Drive" in x for x in self.gesendet()))
+        # Nachts: spiegeln, ein Fehler kommt einmal mit Knopf zur Karte
+        t1 = datetime.datetime(2026, 11, 25, 5, 0, tzinfo=self.a.TZ)
+        self.assertTrue(self.a.ablage_faellig({}, t1))
+        b.spiegel_fehler = "Google Drive ist voll."
+        FalscherServer.anfragen.clear()
+        self.a.ablage_nachts(t1)
+        self.a.ablage_nachts(t1)   # derselbe Tag: nicht noch einmal
+        self.a.ablage_nachts(t1 + datetime.timedelta(days=1))   # derselbe Fehler: keine zweite Nachricht
+        self.assertEqual(b.aufrufe.count(("spiegeln",)), 2)
+        k = self.knoepfe(1)
+        self.assertEqual([(x[0], x[1]) for x in k], [("Google Drive ist voll.", "Brain")])
+        self.assertTrue(k[0][2].endswith("?wo=brain"))
+        self.assertFalse(self.a.ablage_faellig(self.a.load(), t1 + datetime.timedelta(days=1)))
+        b.spiegel_fehler = ""
+        self.a.ablage_nachts(t1 + datetime.timedelta(days=2))
+        self.assertIsNone(self.a.load().get("brain_fehler"))
+        # Aus: Teilen endet, der Block verschwindet, home/brain/ bleibt
+        r = self.senden("/brain/schalten", {"t": self.token(), "an": False})
+        self.assertTrue(r["ok"] and not r["brain"]["an"], r)
+        self.assertIn(("teilen", False), b.aufrufe)
+        self.assertNotIn("brain/REGELN.md", self.lies(os.path.join(self.a.HOME_DIR, "CLAUDE.md")))
+        self.assertTrue(os.path.isfile(os.path.join(self.a.HOME_DIR, "brain", "REGELN.md")))
+
+    def test_brain_fehlt_in_dieser_fassung(self):
+        if importlib.util.find_spec("brain"):
+            self.skipTest("brain.py ist da")
+        self.einrichten_fertig()
+        self.assertIsNone(self.stand()["brain"])
+        self.assertIn("nächsten Stand", self.a.brain_schalten(True))
+        r = subprocess.run([sys.executable, os.path.join(KIT, "einrichten.py"), "--brain", "an"],
+                           env={**os.environ, **self.inst.env}, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Brain fehlt", r.stderr)
+
+    @unittest.skipUnless(importlib.util.find_spec("brain"), "brain.py kommt mit dem Modul-Zweig")
+    def test_brain_echt(self):
+        self.einrichten_fertig()
+        self.assertEqual(self.a.brain_schalten(True), "")
+        self.assertTrue(os.path.isdir(os.path.join(self.a.HOME_DIR, "brain")))
+        s = self.stand()["brain"]
+        self.assertTrue({"an", "teilen", "moeglich", "ordner"} <= set(s), s)
+        self.assertTrue(s["an"])
+        self.assertIn("brain/REGELN.md", self.lies(os.path.join(self.a.HOME_DIR, "CLAUDE.md")))
+
+    def test_kommandozeile(self):
+        env = {**os.environ, **self.inst.env}
+        einrichten = [sys.executable, os.path.join(KIT, "einrichten.py")]
+        r = subprocess.run(einrichten + ["--lou", "an"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Zugang", r.stderr)
+        self.einrichten_fertig()
+        self.assertEqual(self.a.lou_verbinden(), "")
+        r = subprocess.run(einrichten + ["--lou", "aus"], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("lou", json.load(open(self.pfad("mcp.json")))["mcpServers"])
+        # Update mit WhatsApp an: ein Werkzeug ohne „nachziehen“ hält das Update nicht auf
+        self.a.kit.setze_config("whatsapp", "status", "an")
+        r = subprocess.run(einrichten + ["--nachziehen"], env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class LouVorabAngehakt(LouBasis, unittest.TestCase):
+    """Lou und Brain auf der Website angehakt: Lou verbindet sich von selbst, Brain ist nach der Einrichtung an."""
+
+    kits, einladung = "lou,brain", True
+    binden = Einladung.binden
+
+    def setUp(self):
+        super().setUp()
+        self.binden()
+        FalscherServer.anfragen.clear()
+
+    def test_von_selbst(self):
+        b = self.brain()
+        s = self.stand()
+        self.assertEqual((s["kits"], s["lou"]), (["brain", "lou"], {"an": False, "wahl": "", "fehler": ""}))
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")
+        self.pruefe_lou(True)
+        self.assertEqual(self.a.kit_status("brain"), "an")
+        self.assertEqual(b.aufrufe, [("anlegen", "Mara", "an")])
+        self.assertIn("`brain/REGELN.md`", self.lies(os.path.join(self.a.HOME_DIR, "CLAUDE.md")))
+        gruss = [x for x in self.gesendet() if "Fertig, Mara" in x]
+        self.assertEqual(len(gruss), 1, gruss)
+        self.assertIn("Hallo Lou", gruss[0])
+        self.assertIn("welches Thema", gruss[0])
+
+    def test_lou_klappt_nicht(self):
+        FalscheLou.zugang = False
+        r = self.senden("/einrichten/lou", {"t": self.token()})   # so verbindet die Seite im Hintergrund
+        self.assertEqual(r["lou"]["fehler"], self.a.LOU_WEG)
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")   # die Einrichtung geht trotzdem zu Ende
+        self.pruefe_lou(False)
+        k = self.knoepfe()
+        self.assertTrue(any("Lou ließ sich gerade nicht verbinden" in x[0] and x[1] == "Lou" and x[2].endswith("?wo=lou")
+                            for x in k), k)
+
+    def test_ohne_lou_weiter(self):
+        FalscheLou.zugang = False
+        self.senden("/einrichten/lou", {"t": self.token()})
+        self.assertEqual(self.senden("/einrichten/lou-aus", {"t": self.token()})["lou"]["wahl"], "ohne")
+        FalscheLou.zugang = True
+        self.a.name_setzen("Mara", "Lotte")
+        self.a.anmeldung_fertig("claude")
+        self.assertEqual(self.a.abschliessen(), "")
+        self.pruefe_lou(False)   # „Ohne Lou weiter“ gilt
+        self.assertNotIn("/api/zugang", FalscheLou.anfragen[1:])
 
 
 class EigenerServer(unittest.TestCase):

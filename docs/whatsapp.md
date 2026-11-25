@@ -1,10 +1,12 @@
-# WhatsApp-Erweiterung
+# WhatsApp-Erweiterung: Stay Close
 
 Für Menschen, die schon einen Assistenten auf ihrem eigenen Server haben. Der Assistent liest nachts die Einzelchats mit, pflegt zu den Menschen im engen Kreis eine kurze Notiz und schickt morgens bis zu vier Menschen, bei denen sich eine Nachricht lohnt, jeweils mit einem fertigen Entwurf zum Kopieren. Schreiben kann er in WhatsApp nicht, abschicken tut die Person selbst.
 
+Jeden Menschen ordnet er einem Bereich zu: Familie, Privat oder Business. Die Vorschläge am Morgen stehen in dieser Reihenfolge, Business kommt nur montags bis freitags dran, und der Ton des Entwurfs folgt dem Bereich. Einen leeren Bereich schlägt der Nachtlauf vor, ist er unsicher, fragt der Morgen-Check mit drei Knöpfen. Einen gesetzten Bereich ändert nur die Person, ein Satz im Chat wie „Alex ist Familie“ reicht.
+
 ## Einschalten
 
-Wer den Assistenten neu einrichtet, sieht auf der Einrichtungsseite nach Kalender und Mail den Schritt WhatsApp. Bei „Ja, WhatsApp dazu“ baut der Server sofort, der QR-Code kommt im Chat, sobald die Einrichtung durch ist. Bei „Ohne WhatsApp weiter“ oder bei älteren Einrichtungen bietet der Assistent WhatsApp einmal von selbst an, tagsüber und frühestens drei Tage nach der Begrüßung, mit den Knöpfen „WhatsApp verbinden“, „Später“ und „Nein danke“. Ohne Antwort fragt er nach einer Woche ein zweites Mal, danach nur noch auf `/whatsapp`. „WhatsApp verbinden“ öffnet die Seite `/whatsapp` der Einrichtungsseite in Telegram (eigener Link, gilt sieben Tage). Dort stehen Funktionen und Risiken, eingewilligt wird mit „Einverstanden, verbinden“. Dann baut der Server die Verbindung (beim ersten Mal 10 bis 15 Minuten). Sobald der QR-Code da ist, meldet sich der Assistent im Chat mit dem Knopf „QR-Code zeigen“. Die Seite zeigt den Code, er erneuert sich von selbst und verlässt den Server nie. Gescannt wird mit dem Handy unter Verknüpfte Geräte, die Seite muss deshalb auf einem zweiten Bildschirm offen sein, etwa Telegram am Laptop. Nach dem Scan fragt der Assistent, wer eng und wer nah ist, und legt dazu Notizen an. Der erste Nachtlauf um 02:00 liest 30 Tage zurück.
+Wer den Assistenten neu einrichtet, sieht auf der Einrichtungsseite nach Kalender und Mail den Schritt WhatsApp. Bei „Ja, WhatsApp dazu“ baut der Server sofort, der QR-Code kommt im Chat, sobald die Einrichtung durch ist. Bei „Ohne WhatsApp weiter“ oder bei älteren Einrichtungen bietet der Assistent WhatsApp einmal von selbst an, tagsüber und frühestens drei Tage nach der Begrüßung, mit den Knöpfen „WhatsApp verbinden“, „Später“ und „Nein danke“. Ohne Antwort fragt er nach einer Woche ein zweites Mal, danach nur noch auf `/whatsapp`. „WhatsApp verbinden“ öffnet die Seite `/whatsapp` der Einrichtungsseite in Telegram (eigener Link, gilt sieben Tage). Dort stehen Funktionen und Risiken, eingewilligt wird mit „Einverstanden, verbinden“. Dann baut der Server die Verbindung (beim ersten Mal 10 bis 15 Minuten). Sobald der QR-Code da ist, meldet sich der Assistent im Chat mit dem Knopf „QR-Code zeigen“. Die Seite zeigt den Code, er erneuert sich von selbst und verlässt den Server nie. Gescannt wird mit dem Handy unter Verknüpfte Geräte, die Seite muss deshalb auf einem zweiten Bildschirm offen sein, etwa Telegram am Laptop. Nach dem Scan fragt der Assistent, wer eng und wer nah ist und wer zu Familie, Privat oder Business gehört, und legt dazu Notizen an. Der erste Nachtlauf um 02:00 liest 30 Tage zurück.
 
 - `/whatsapp` zeigt den Stand
 - `/whatsapp_neu` richtet neu ein, etwa wenn das Handy die Verknüpfung gelöst hat
@@ -25,11 +27,15 @@ Nur auf dem eigenen Server (`box/selbst.sh`). Auf einer Box mit mehreren Persone
 | Bridge | `whatsapp/`, gebaut von `box/whatsapp.sh` | adelaidasofia/whatsapp-mcp v0.4.1 (MIT) mit den Patches aus `whatsapp/patches/`, verknüpftes Gerät, SQLCipher, Port 8080 nur lokal |
 | Connector | `whatsapp/server_http.py` | fünf lesende Werkzeuge mit Bearer-Token, Port 8081 nur lokal |
 | Auftrag | `systemd/assistent-whatsapp.path` | der Bot schreibt `~/.local/state/assistent/whatsapp-auftrag`, root baut, Stand in `/var/lib/pearl-kit/whatsapp/stand` |
-| Werkzeug | `werkzeuge/whatsapp.py` | `hole` (Delta je Chat bis zum Lesestand, Warteschlange ab 25 Chats), `pruefe`, `status`, `chats`, `lies`, `einrichten`, `abschalten` |
-| Notizen | `home/whatsapp/` aus `vorlage/whatsapp/` | Regeln, Verfahren des Nachtlaufs, Lesestand, Bericht, eine Notiz je Mensch |
+| Werkzeug | `werkzeuge/whatsapp.py` | `hole` (Delta je Chat bis zum Lesestand, Warteschlange ab 25 Chats), `pruefe`, `status`, `chats`, `lies`, `einrichten`, `nachziehen`, `abschalten` |
+| Notizen | `home/whatsapp/` aus `vorlage/whatsapp/` | Regeln, Verfahren des Nachtlaufs, Lesestand, Bericht, eine Notiz je Mensch mit Kreis und Bereich, `kontakte.md` mit allen Direktchats (Name, Bereich, letzte Nachricht) |
 | Läufe | `whatsapp-nacht` 02:00, `whatsapp-kreis` einmal nach dem Scan | die Vorschläge stehen im Morgen-Check, sonst in `whatsapp-morgen` 07:45 |
 
 Die KI bekommt keinen WhatsApp-Connector. Sie sieht Nachrichtentext nur im Delta des Nachtlaufs und über `whatsapp.py lies`, wenn die Person danach fragt. Kennungen und Nummern bleiben außerhalb von `home/`.
+
+## Nach einem Update
+
+`python3 werkzeuge/whatsapp.py nachziehen` bringt die Kit-eigenen Dateien in `home/whatsapp/` auf den Stand der Vorlage: `verfahren.md`, `CLAUDE.md` und `personen/_vorlage.md` werden ersetzt, in `CLAUDE.md` bleiben der Schalter unter „Neue Kontakte“ und das Datum „Eingeschaltet am“. Fehlt `kontakte.md`, entsteht sie, dem Bericht fehlende Abschnitte werden ergänzt. Bei `whatsapp-nacht` und `whatsapp-morgen` wird nur der Text erneuert, Zeit und Modell im Kopf bleiben. Notizen, Lesestand, Bericht und Vorschläge fasst der Befehl nicht an. Er ist mehrfach aufrufbar und endet mit Exit 0, auch ohne eingerichtetes WhatsApp. `einrichten.py --nachziehen` ruft ihn auf, wenn WhatsApp an ist.
 
 ## Stolperfallen
 
