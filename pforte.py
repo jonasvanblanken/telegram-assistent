@@ -559,9 +559,9 @@ function supportZeigen(){const s=S.support||{};$('s-support').hidden=!s.whatsapp
     if(S.whatsapp&&S.whatsapp.an)kits.push('Stay Close');if(S.brain&&S.brain.an)kits.push('Brain');
     if(S.lou&&S.lou.an)kits.push('Lou');if(S.google&&S.google.verbunden)kits.push('Kalender und Mail');
     for(const f of [S.lou&&S.lou.fehler,S.brain&&S.brain.fehler,S.ablage&&S.ablage.fehler])if(f)meldung.push(f);
-    const text='Hallo, ich brauche Hilfe mit meinem Assistenten.\n'+(S.eingerichtet?'Eingerichtet':'Noch in der Einrichtung')+
+    const text='Hallo, ich brauche Hilfe mit meinem Assistenten.\\n'+(S.eingerichtet?'Eingerichtet':'Noch in der Einrichtung')+
       (s.fassung?', Stand '+s.fassung:'')+(S.anbieter?', KI '+S.anbieter:'')+', Kits: '+(kits.join(', ')||'keine')+'.'+
-      (meldung.length?'\nLetzte Meldung: '+meldung.join(' / '):'')+'\n\nMein Problem: ';
+      (meldung.length?'\\nLetzte Meldung: '+meldung.join(' / '):'')+'\\n\\nMein Problem: ';
     oeffne('https://wa.me/'+s.whatsapp+'?text='+encodeURIComponent(text))}}
 function fehler(id,text){$(id).textContent=text||'';$(id).hidden=!text}
 function hat(k){return S.eingerichtet||!S.kits||S.kits.includes(k)}   // vorab gewählte Kits, in den Einstellungen alle

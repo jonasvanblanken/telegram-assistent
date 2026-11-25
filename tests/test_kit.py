@@ -193,6 +193,23 @@ class Sauberkeit(unittest.TestCase):
                 compile(open(pfad, encoding="utf-8").read(), rel, "exec")
 
 
+    def test_seiten_skripte_js(self):
+        """Jede Seite der Pforte: eingebettetes JavaScript ist gültig (ein \\n im Python-String wird sonst ein echter Umbruch)."""
+        node = shutil.which("node") or (os.path.exists("/opt/pearl-kit-ki/bin/node") and "/opt/pearl-kit-ki/bin/node")
+        if not node:
+            self.skipTest("node fehlt")
+        import pforte
+        seiten = [pforte.einrichtungsseite("anna", "anna_bot"), pforte.einrichtungsseite("anna", "anna_bot", einstellungen=True),
+                  pforte.whatsapp_seite("anna", "anna_bot"), pforte.ergebnisseite("anna", "anna_bot", True),
+                  pforte.ergebnisseite("anna", "anna_bot", False, "x")]
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, html in enumerate(seiten):
+                for j, js in enumerate(re.findall(r"<script>(.*?)</script>", html, re.S)):
+                    datei = os.path.join(tmp, f"s{i}-{j}.js")
+                    open(datei, "w", encoding="utf-8").write(js)
+                    r = subprocess.run([node, "--check", datei], capture_output=True, text=True)
+                    self.assertEqual(r.returncode, 0, f"Seite {i}, Skript {j}: {r.stderr[-400:]}")
+
 class Vorlage(unittest.TestCase):
     def pruefe(self, google):
         inst = Instanz(google=google)
