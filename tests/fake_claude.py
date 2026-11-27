@@ -8,15 +8,47 @@ import sys
 import uuid
 
 if sys.argv[1:2] == ["setup-token"]:
-    print("Opening browser to sign in…")
-    print("Browser didn't open? Use the url below to sign in (c to copy)\n")
-    print("https://claude.com/cai/oauth/authorize?code=true&client_id=test&response_type=code&state=zustand\n", flush=True)
-    code = input("Paste code here if prompted > ").strip()
-    if code in ("gut#zustand", "gut"):
-        print("\nLong-lived authentication token created successfully!\n")
-        print("Your OAuth token (valid for 1 year):\n\n" + "sk-ant-" + "oat01-" + "t" * 40 + "\n", flush=True)
+    # Wie Claude Code (Ink) im Terminal: roh lesen, Enter zählt nur als eigenes Paket. Kommt es im selben Paket
+    # wie der Code, ist es Teil des Eingefügten und nichts wird abgeschickt. Bei falschem Code wartet es auf Enter.
+    import termios
+    import tty
+
+    def zeile(text=""):
+        sys.stdout.write(text + "\r\n")
+        sys.stdout.flush()
+
+    fd = sys.stdin.fileno()
+    tty.setraw(fd)
+    zeile("Opening browser to sign in…")
+    zeile("Browser didn't open? Use the url below to sign in (c to copy)")
+    zeile()
+    zeile("https://claude.com/cai/oauth/authorize?code=true&client_id=test&response_type=code&state=zustand")
+    zeile()
+    sys.stdout.write("Paste code here if prompted > ")
+    sys.stdout.flush()
+    eingabe = ""
+    while True:
+        paket = os.read(fd, 4096).decode("utf-8", "replace")
+        if not paket:
+            sys.exit(1)
+        if paket in ("\r", "\n"):
+            break
+        eingabe += paket.replace("\r", "\n")
+        sys.stdout.write("*" * len(paket))
+        sys.stdout.flush()
+    if eingabe.strip() in ("gut#zustand", "gut"):
+        zeile()
+        zeile("Long-lived authentication token created successfully!")
+        zeile()
+        zeile("Your OAuth token (valid for 1 year):")
+        zeile()
+        zeile("sk-ant-" + "oat01-" + "t" * 40)
         sys.exit(0)
-    print("OAuth error: Invalid code", flush=True)
+    zeile()
+    sys.stdout.write("OAuth error: Request failed with status code 400Press Enter to retry. ")
+    sys.stdout.flush()
+    while os.read(fd, 4096):   # wie das echte Programm: bleibt offen, bis jemand Enter drückt oder es beendet
+        pass
     sys.exit(1)
 
 prompt = sys.stdin.read()

@@ -52,6 +52,8 @@ import kit
 
 ANSI = re.compile(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78DEHM]")
 LOGIN_MAX = 15 * 60
+CODE_MAX = 90         # nach dem Code kommt das Token in Sekunden, danach gilt die Anmeldung als gescheitert
+ENTER_PAUSE = 0.4     # Claude Code (Ink) nimmt Code und Enter in einem Paket als Einfügen, nicht als Absenden
 MUSTER = {
     "claude": {"url": re.compile(r"https://claude\.(?:ai|com)/\S*oauth/authorize\?\S+"),
                "token": re.compile(r"sk-ant-oat\d*-[A-Za-z0-9_-]{8,}")},
@@ -97,7 +99,7 @@ class Anmeldung:
     def __init__(self, name, fertig):
         self.name, self.fertig_melden = name, fertig
         self.stand, self.url, self.geraetecode, self.fehler, self.puffer = "startet", "", "", "", ""
-        self.t0, self.lock = time.time(), threading.Lock()
+        self.t0, self.t_code, self.lock = time.time(), 0.0, threading.Lock()
         vorher = {"chatgpt": CODEX_ZUGANG, "gemini": GEMINI_ZUGANG}.get(name)
         self.zugang_alt = os.path.getmtime(vorher) if vorher and os.path.exists(vorher) else 0
         cmd, env, cwd = login_befehl(name)
@@ -124,6 +126,9 @@ class Anmeldung:
         while True:
             if time.time() - self.t0 > LOGIN_MAX:
                 self._fehler("Die Anmeldung hat zu lange gedauert. Fang einfach noch einmal an.")
+                break
+            if self.name == "claude" and self.t_code and time.time() - self.t_code > CODE_MAX:
+                self._fehler("Claude hat auf den Code nicht geantwortet. Fang einfach noch einmal an.")
                 break
             if self.name == "gemini" and self.stand == "prueft" and self._zugang_neu(GEMINI_ZUGANG):
                 self._fertig()
@@ -158,6 +163,10 @@ class Anmeldung:
             self.stand = "bereit" if self.name != "chatgpt" else "prueft"
         if self.name == "claude" and self.stand == "prueft":
             t = m["token"].search(self.puffer)
+            if not t and "OAuth error" in self.puffer:   # setup-token wartet dann auf Enter, statt sich zu beenden
+                self._fehler("Claude hat den Code nicht angenommen. Fang noch einmal an und kopier den ganzen Code, "
+                             "er ist lang und endet erst nach dem #-Teil.")
+                return
             if t:
                 kit.setze_secret("CLAUDE_CODE_OAUTH_TOKEN", t.group(0))
                 kit.setze_secret("CLAUDE_TOKEN_SEIT", time.strftime("%Y-%m-%d"))
@@ -198,8 +207,10 @@ class Anmeldung:
         if not code or len(code) > 2000:
             return False
         with self.lock:
-            self.stand = "prueft"
-        os.write(self.fd, code.encode() + b"\r")
+            self.stand, self.puffer, self.t_code = "prueft", "", time.time()   # ab hier zählt nur die Antwort auf den Code
+        os.write(self.fd, code.encode())
+        time.sleep(ENTER_PAUSE)   # Enter als eigenes Paket, sonst bleibt der Code nur im Eingabefeld stehen
+        os.write(self.fd, b"\r")
         return True
 
     def beenden(self):
