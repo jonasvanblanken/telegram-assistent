@@ -28,7 +28,7 @@ Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
 ## Was die Person bekommt
 
 - Einen eigenen Telegram-Bot mit Namen ihrer Wahl, der nur ihr antwortet
-- Text, Sprachnachrichten (mit OpenAI-Key), Fotos und Dateien. Briefe und Rechnungen landen mit Fristen in den Akten
+- Text, Sprachnachrichten (hört der Server selbst ab, ohne Key), Fotos und Dateien. Briefe und Rechnungen landen mit Fristen in den Akten
 - Morgen-Check um 07:30, kurzer Abend-Check um 21:00, stündlicher Herzschlag (höchstens zwei Nachrichten am Tag), Erinnerungen auf Zuruf
 - Ein Gedächtnis, das jede Nacht gesichert wird, und ein Logbuch des ganzen Chats
 - Mit Google: Termine lesen und eintragen, Mails lesen und als Entwurf beantworten, Drive, Aufgaben. Senden kann der Assistent nicht
@@ -47,6 +47,7 @@ Der Rest dieser Datei beschreibt den Betrieb einer gemeinsamen Box mit Betreuer.
   vorlage/                      CLAUDE.md, Profil, Zeitpläne, settings und mcp
   box/                          Skripte für root und die Wache
 /opt/pearl-kit-ki/              Node, Codex und Gemini CLI, feste Fassungen (box/ki-programme.sh)
+/opt/pearl-kit-ki/sprache/      Sprachnachrichten: faster-whisper und Modell small, rund 900 MB (box/sprache.sh)
 /etc/pearl-kit/                 box.env (Wache, Domain), google-client.json (OAuth-Client)
 /etc/caddy/pearl-kit/           je Person ein Pfad der Einrichtungsseite
 /home/a-<kurz>/                 je Person, chmod 700
@@ -67,7 +68,7 @@ Je Person laufen zwei systemd-User-Units: `assistent.service` und, mit Google, `
 | Box Hetzner CPX32 (4 vCPU, 8 GB), bis etwa fünf Personen | du | um 36 € |
 | Box Hetzner CPX42 (8 vCPU, 16 GB), acht bis zehn Personen | du | um 70 € |
 | Hetzner-Backup der Box (+20 %) | du | 7–14 € |
-| OpenAI für Sprachnachrichten (Whisper, 0,6 Cent je Minute) | wer den Key stellt | meist unter 1 € |
+| OpenAI für Sprachnachrichten (Whisper, 0,6 Cent je Minute), nur falls das Abhören auf dem Server fehlt | wer den Key stellt | meist unter 1 € |
 
 Telegram und Google kosten nichts, die Domain ist eine Subdomain einer vorhandenen. Die kleinen Abos reichen für Chat und Check-ins. Wer viel schreibt oder lange Dokumente schickt, stößt dort ans Limit: Der Assistent sagt dann Bescheid und holt nach.
 
@@ -160,6 +161,7 @@ Brain legt in `home/brain/` einen geordneten Ordner für die Themen der Person a
 
 - **Geheimnisse:** Für Claude sperren deny-Regeln `secrets.env`, `config.toml` und `mcp.json` (darin steht der Lou-Code). Codex und Gemini kennen solche Regeln nicht, sie könnten die Schlüssel der Person lesen. Die bleiben trotzdem in ihrem User, an fremde Instanzen kommen sie nicht
 - **Codex-Sandbox:** Scheitert der ChatGPT-Lauf im Selbsttest an der Sandbox (Fehler mit `landlock`, `bwrap` oder `sandbox`), in `config.toml` `rechte = "voll"` setzen
+- **Sprachnachrichten:** Der Server hört sie selbst ab (`sprache.py`, faster-whisper mit dem Modell small, int8). Gemessen am 27.11.2026: 45 Sekunden Sprache in gut 7 s mit zwei Kernen, 10 s mit einem, rund 700 MB Arbeitsspeicher für die Dauer des Abhörens, danach wieder frei. Installiert wird bei Einrichtung und Update über `box/sprache.sh` nach `/opt/pearl-kit-ki/sprache` (Pakete mit festen Fassungen, Modell mit Prüfsummen, Probe vor dem Tausch). Scheitert das, steht der Grund in `/opt/pearl-kit-ki/sprache-fehler`, eigene Server versuchen es höchstens alle drei Stunden neu, und der Assistent sagt der Person selbst, warum er gerade nicht zuhören kann. `/status` zeigt den Stand. Ein `OPENAI_API_KEY` in `secrets.env` greift nur noch, wenn das Abhören auf dem Server fehlt oder scheitert. Aufnahmen über 15 Minuten hört er nicht ab
 - **ChatGPT-Anmeldung per Code:** Lehnt OpenAI den Gerätecode ab, muss die Person die Geräte-Anmeldung in ChatGPT unter Einstellungen, Sicherheit einschalten. OpenAI warnt auf der Seite davor, Codes von anderen einzugeben. Das gilt Fremden, hier kommt der Code von der eigenen Einrichtungsseite
 - **Gemini mit Workspace-Konto:** Firmen- und Schulkonten brauchen ein eigenes Google-Cloud-Projekt. Für Gemini deshalb ein privates Google-Konto nehmen, Google für Kalender und Mail darf trotzdem das Firmenkonto sein
 - **Erster Gemini-Lauf:** Der Kit gibt Gemini den Prompt über stdin. Lokal ist das nur bis zur Anmeldung geprüft, den ersten echten Lauf im Selbsttest anschauen

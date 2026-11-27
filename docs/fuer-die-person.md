@@ -18,7 +18,7 @@ Danach stellt sich dein Assistent im Chat vor.
 
 ## Im Alltag
 
-- Schreib, wie du einer Freundin schreiben würdest. Sprachnachrichten, Fotos von Briefen und PDFs gehen auch
+- Schreib, wie du einer Freundin schreiben würdest. Sprachnachrichten bis 15 Minuten, Fotos von Briefen und PDFs gehen auch. Sprachnachrichten hört dein Server selbst ab, sie gehen an niemanden sonst
 - „Erinnere mich am Freitag um 9 an die Steuer“ legt eine Erinnerung an
 - Morgens um halb acht kommt eine kurze Nachricht. Passt dir die Zeit nicht, sag es ihm einfach
 - Mails schickt er nie selbst. Er legt Entwürfe an, abschicken tust du

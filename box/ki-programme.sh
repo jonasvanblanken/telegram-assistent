@@ -102,3 +102,7 @@ if [ -x "$ZIEL/bin/codex" ] && id nobody >/dev/null 2>&1; then
   rm -rf "$PROBE"
 fi
 echo "   codex $("$ZIEL/bin/codex" --version 2>/dev/null | tail -1), gemini $("$ZIEL/bin/gemini" --version 2>/dev/null | tail -1)"
+
+# Sprachnachrichten auf dem Server selbst (box/sprache.sh). Scheitert es, läuft das Update trotzdem weiter, und der
+# Assistent sagt der Person, warum er Sprachnachrichten noch nicht abhören kann.
+bash "$(dirname "$0")/sprache.sh" || echo "   Sprachnachrichten fehlen noch, nächster Versuch beim nächsten Lauf" >&2

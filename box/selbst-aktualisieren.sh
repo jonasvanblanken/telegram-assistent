@@ -49,6 +49,11 @@ offene_neustarts() {  # von box/aktualisieren.sh zurückgestellte Neustarts nach
 }
 
 # Alles in Funktionen: bash hat sie ganz gelesen, bevor der Checkout unten diese Datei austauscht.
+sprache_nachholen() {  # Sprachnachrichten fehlen noch (etwa ein Download scheiterte): höchstens alle drei Stunden neu
+  [ -f "$KIT/box/sprache.sh" ] || return 0
+  bash "$KIT/box/sprache.sh" --nachholen || true
+}
+
 main() {
   [ -d "$QUELLE/.git" ] || { echo "$QUELLE ist kein Git-Stand, nichts zu tun"; exit 0; }
   if kill -0 "$(cat /run/pearl-kit-einrichtung 2>/dev/null || echo x)" 2>/dev/null; then
@@ -61,6 +66,7 @@ main() {
   alt=$(git -C "$QUELLE" rev-parse HEAD)
   if [ "$neu" = "$alt" ]; then
     offene_neustarts
+    sprache_nachholen
     exit 0
   fi
   read -r fassung versuche _ 2>/dev/null < "$GESCHEITERT" || true

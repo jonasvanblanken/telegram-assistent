@@ -1,0 +1,9 @@
+# Was faster-whisper braucht, in festen Fassungen (27.11.2026 auf x86 und ARM mit Python 3.12 geprüft).
+# av bleibt bei 16: ab 19 kennt av.open() das Argument metadata_errors nicht mehr, faster-whisper 1.2.1 bricht dann ab.
+# onnxruntime fehlt mit Absicht, es dient nur dem VAD-Filter, den sprache.py nicht nutzt.
+ctranslate2==4.8.5
+av==16.1.0
+tokenizers==0.23.3
+huggingface-hub==2.4.0
+tqdm==4.70.1
+numpy==2.5.4

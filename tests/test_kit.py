@@ -347,6 +347,73 @@ class Dienst(Chat, unittest.TestCase):
         self.assertIn("Testperson", logbuch)
         self.assertIn("Testi", logbuch)
 
+    def sprachnachricht(self, stand="bereit", modus="ok", dauer=7, key=""):
+        """Sprachnachricht mit falschem Abhörprogramm. stand: bereit, fehler oder fehlt. modus: ok, leer, kaputt."""
+        ordner = os.path.join(self.inst.tmp.name, f"sprache-{stand}-{modus}")
+        if stand == "bereit":
+            os.makedirs(os.path.join(ordner, "bin"), exist_ok=True)
+            open(os.path.join(ordner, "FASSUNG"), "w").write("test")
+            prog = os.path.join(ordner, "bin", "python3")
+            open(prog, "w").write("#!/bin/sh\n" + {"ok": "printf 'Bitte erinnere mich morgen an den Zahnarzt'\n",
+                                                   "leer": "exit 3\n", "kaputt": "echo kaputt >&2; exit 1\n"}[modus])
+            os.chmod(prog, 0o755)
+        elif stand == "fehler":
+            open(ordner + "-fehler", "w").write("download 2026-11-27")
+        alt = (self.a.SPRACHE_ORDNER, self.a.lade_datei)
+        eingang = os.path.join(self.inst.tmp.name, "sprachnachricht.ogg")
+        open(eingang, "wb").write(b"OggS")
+        self.a.SPRACHE_ORDNER, self.a.lade_datei = ordner, lambda fid, name: eingang
+        self.a.kit.setze_secret("OPENAI_API_KEY", key)
+        try:
+            n = len(self.inst.ki_log())
+            self.a.handle({"update_id": 1, "message": {"message_id": 1, "date": int(time.time()), "from": {"id": 4242},
+                                                         "voice": {"file_id": "v1", "duration": dauer},
+                                                         "chat": {"id": 4242, "type": "private"}}})
+            return self.gesendet(), n
+        finally:
+            self.a.SPRACHE_ORDNER, self.a.lade_datei = alt
+
+    def test_sprachnachricht_auf_dem_server(self):
+        texte, _ = self.sprachnachricht()
+        self.assertTrue(any("Zahnarzt" in t for t in texte), texte)
+        self.assertIn("[Sprachnachricht 0:07] Bitte erinnere mich morgen an den Zahnarzt", self.inst.ki_log()[-1]["prompt"])
+
+    def test_sprachnachricht_ohne_programm_sagt_der_dienst_selbst(self):
+        for stand, satz in (("fehlt", "nächsten Update"), ("fehler", "nicht geklappt")):
+            FalscherServer.anfragen.clear()
+            texte, n = self.sprachnachricht(stand=stand)
+            self.assertEqual(len(texte), 1, texte)
+            self.assertIn("Sprachnachrichten kann ich", texte[0])
+            self.assertIn(satz, texte[0])
+            time.sleep(0.5)
+            self.assertEqual(len(self.inst.ki_log()), n, "die KI darf die Sprachnachricht nicht bekommen")
+
+    def test_sprachnachricht_leer_kaputt_zu_lang(self):
+        for modus, dauer, satz in (("leer", 7, "nichts verstanden"), ("kaputt", 7, "nicht abhören"),
+                                   ("ok", 20 * 60, "bis 15 Minuten")):
+            FalscherServer.anfragen.clear()
+            texte, n = self.sprachnachricht(modus=modus, dauer=dauer)
+            self.assertEqual(len(texte), 1, texte)
+            self.assertIn(satz, texte[0])
+            time.sleep(0.5)
+            self.assertEqual(len(self.inst.ki_log()), n)
+
+    def test_foto_ohne_text_kommt_an(self):
+        foto = os.path.join(self.inst.tmp.name, "foto.jpg")
+        open(foto, "wb").write(b"\xff\xd8")
+        alt, self.a.lade_datei = self.a.lade_datei, lambda fid, name: foto
+        try:
+            self.a.handle({"update_id": 1, "message": {"message_id": 1, "date": int(time.time()), "from": {"id": 4242},
+                                                         "photo": [{"file_id": "f1"}], "chat": {"id": 4242, "type": "private"}}})
+        finally:
+            self.a.lade_datei = alt
+        self.assertTrue(self.gesendet())
+        self.assertIn("[Foto:", self.inst.ki_log()[-1]["prompt"])
+
+    def test_status_nennt_sprachnachrichten(self):
+        self.nachricht("/status")
+        self.assertTrue(any("Sprachnachrichten:" in t for t in self.gesendet()))
+
     def test_fremdes_konto_ignoriert(self):
         n = len(self.inst.ki_log())
         self.nachricht("Hallo", von=999)

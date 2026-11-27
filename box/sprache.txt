@@ -1,0 +1,4 @@
+# Sprachnachrichten (box/sprache.sh): das oberste Paket nur mit dieser Prüfsumme (pip --require-hashes --no-deps).
+# Neue Fassung: Prüfsumme von https://pypi.org/pypi/faster-whisper/<version>/json (digests.sha256) eintragen.
+faster-whisper==1.2.1 \
+    --hash=sha256:79a66ad50688c0b794dd501dc340a736992a6342f7f95e5811be60b5224a26a7

@@ -26,7 +26,7 @@ Abo-Kontingent eines Modells aufgebraucht, weicht der Dienst aus oder holt Läuf
 
 Instanz: ~/assistent (oder ASSISTENT_DIR) mit config.toml, settings.json, mcp.json und home/, angelegt von
 einrichten.py. Schlüssel in ~/.config/assistent/secrets.env: TG_TOKEN, CLAUDE_CODE_OAUTH_TOKEN (Claude, aus
-`claude setup-token`), GOOGLE_MCP_TOKEN, optional OPENAI_API_KEY (Sprachnachrichten). Mit [web] adresse läuft
+`claude setup-token`), GOOGLE_MCP_TOKEN, optional OPENAI_API_KEY (Sprachnachrichten, nur wenn sprache.py auf dem Server fehlt). Mit [web] adresse läuft
 im Dienst die Einrichtungsseite (pforte.py), die der Bot als Web App in Telegram öffnet: Namen, KI-Anmeldung,
 Kalender und Mail. Ohne [person] telegram_id wartet der Dienst auf den Einladungslink (/start <code>), home/ entsteht
 erst, wenn die Person die Einrichtung abschließt.
@@ -1425,17 +1425,61 @@ def lade_datei(file_id, name):
     return ziel
 
 
-def transkribiere(pfad):
+SPRACHE_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprache.py")
+SPRACHE_ORDNER = os.environ.get("ASSISTENT_SPRACHE") or "/opt/pearl-kit-ki/sprache"   # box/sprache.sh legt es an
+SPRACHE_LAENGE = 15 * 60     # längere Aufnahmen hören wir nicht ab, der Dienst wartet sonst zu lange
+SPRACHE_HINWEIS = {
+    "fehlt": "Sprachnachrichten kann ich auf deinem Server noch nicht abhören. Das Programm dafür kommt mit dem "
+             "nächsten Update von selbst, du musst nichts tun. Bis dahin schreib mir bitte kurz, was du sagen wolltest.",
+    "fehler": "Sprachnachrichten kann ich gerade noch nicht abhören, weil die Einrichtung dafür auf deinem Server nicht "
+              "geklappt hat. Er versucht es von selbst neu, du musst nichts tun. Bis dahin schreib mir bitte kurz, "
+              "was du sagen wolltest.",
+    "kaputt": "Diese Sprachnachricht konnte ich nicht abhören. Schick sie bitte noch einmal oder schreib mir kurz, "
+              "worum es geht.",
+    "leer": "In dieser Sprachnachricht habe ich nichts verstanden. Magst du sie noch einmal aufnehmen?",
+    "lang": "Sprachnachrichten bis 15 Minuten kann ich abhören, diese ist länger. Teil sie bitte auf oder schreib mir "
+            "kurz, worum es geht.",
+}
+
+
+def sprache_stand():
+    """bereit, fehler oder fehlt: kann dieser Server Sprachnachrichten selbst abhören?"""
+    if os.path.isfile(os.path.join(SPRACHE_ORDNER, "FASSUNG")) \
+            and os.access(os.path.join(SPRACHE_ORDNER, "bin", "python3"), os.X_OK):
+        return "bereit"
+    return "fehler" if os.path.exists(SPRACHE_ORDNER + "-fehler") else "fehlt"
+
+
+def transkribiere(pfad, dauer=0):
+    """Sprachnachricht als Text, zuerst auf dem Server selbst (sprache.py), sonst mit OPENAI_API_KEY über Whisper.
+    Rückgabe (text, grund): ohne Text sagt grund, warum (fehlt, fehler, kaputt, leer, lang)."""
+    if dauer > SPRACHE_LAENGE:
+        return None, "lang"
+    stand, grund = sprache_stand(), ""
+    if stand == "bereit":
+        try:
+            r = subprocess.run([os.path.join(SPRACHE_ORDNER, "bin", "python3"), "-I", SPRACHE_PY, pfad,
+                                "--sprache", SPRACHE, "--modell", os.path.join(SPRACHE_ORDNER, "modell")],
+                               capture_output=True, text=True, timeout=max(120, dauer * 3), stdin=subprocess.DEVNULL)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip(), ""
+            grund = "leer" if r.returncode == 3 else "kaputt"
+            if grund == "kaputt":
+                log(f"Sprachnachricht: sprache.py endete mit {r.returncode}: {r.stderr.strip()[-300:]}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"Sprachnachricht: sprache.py nicht gelaufen ({type(e).__name__})")
+            grund = "kaputt"
     key = secret("OPENAI_API_KEY")
-    if not key:
-        return None
+    if not key or grund == "leer":
+        return None, grund or stand
     with open(pfad, "rb") as f:
         r = requests.post("https://api.openai.com/v1/audio/transcriptions",
                           headers={"Authorization": f"Bearer {key}"},
                           files={"file": ("sprachnachricht.ogg", f)},
                           data={"model": "whisper-1", "language": SPRACHE}, timeout=180)
     r.raise_for_status()
-    return r.json().get("text", "").strip()
+    text = r.json().get("text", "").strip()
+    return (text, "") if text else (None, "leer")
 
 
 def rel(p):
@@ -1459,12 +1503,19 @@ def als_text(m):
         p = lade_datei(a["file_id"], a.get("file_name") or "sprachnachricht.ogg")
         dauer = f"{a.get('duration', 0) // 60}:{a.get('duration', 0) % 60:02d}"
         try:
-            t = transkribiere(p)
+            telegram("sendChatAction", {"chat_id": PERSON_ID, "action": "typing"}, timeout=10)
+        except Exception:
+            pass
+        try:
+            t, grund = transkribiere(p, a.get("duration", 0))
         except Exception as e:
             log(f"Transkription fehlgeschlagen ({type(e).__name__})")
-            t = None
-        teile.append(f"[Sprachnachricht {dauer}] {t}" if t else
-                     f"[Sprachnachricht {dauer}, nicht transkribiert, liegt in {rel(p)}]")
+            t, grund = None, "kaputt"
+        if t:
+            teile.append(f"[Sprachnachricht {dauer}] {t}")
+        else:   # der Dienst erklärt es selbst, die KI bekommt nichts zum Raten
+            log(f"Sprachnachricht nicht abgehört ({grund})")
+            sende_text(SPRACHE_HINWEIS.get(grund) or SPRACHE_HINWEIS["kaputt"])
     if m.get("photo"):
         p = lade_datei(m["photo"][-1]["file_id"], "foto.jpg")
         teile.append(f"[Foto: {rel(p)}]")
@@ -2734,6 +2785,10 @@ def befehl(text):
                   f"Warteschlange: {_arbeit.qsize()}"]
         if (ip := server_ip()):
             zeilen.append(f"Server-IP: {ip}")
+        zeilen.append("Sprachnachrichten: " + {"bereit": "höre ich auf dem Server selbst ab",
+                                               "fehler": "Einrichtung gescheitert, der Server versucht es neu",
+                                               "fehlt": "kommen mit dem nächsten Update"}[sprache_stand()]
+                      + (", sonst über OpenAI" if secret("OPENAI_API_KEY") else ""))
         if wa_moeglich() and wa_status() == "an":
             zeilen.append(f"WhatsApp: {'verbunden' if wa_stand()[0] == 'fertig' else wa_stand()[0] or 'unklar'}, mehr mit /whatsapp")
         for m, bis in st.get("gesperrt", {}).items():
@@ -3048,11 +3103,11 @@ def handle(u):
     if chat.get("type") != "private" or frm.get("id") != PERSON_ID:
         log(f"Fremdes Konto {frm.get('id')} ignoriert")
         return
-    if text.startswith("/") and text.split()[0].lower().split("@")[0] in ("/neu", "/status", "/start", "/hilfe", "/help", "/google",
-                                                                       "/anmelden", "/einrichten", "/ki",
-                                                                       "/whatsapp", "/whatsapp_ja", "/whatsapp_neu",
-                                                                       "/whatsapp_aus") or \
-            re.fullmatch(r"/ki_[a-z]+", text.split()[0].lower().split("@")[0]):
+    # Sprachnachrichten und Fotos haben keinen Text: dann gibt es kein erstes Wort (bis 27.11. ein IndexError, der die
+    # Nachricht still verwarf)
+    erstes = text.split()[0].lower().split("@")[0] if text.startswith("/") else ""
+    if erstes in ("/neu", "/status", "/start", "/hilfe", "/help", "/google", "/anmelden", "/einrichten", "/ki",
+                  "/whatsapp", "/whatsapp_ja", "/whatsapp_neu", "/whatsapp_aus") or re.fullmatch(r"/ki_[a-z]+", erstes):
         return befehl(text)
     if google_rueckruf(text) or wa_antwort(text) or lou_knopf(text):
         return

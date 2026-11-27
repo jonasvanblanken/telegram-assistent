@@ -120,7 +120,7 @@ if ! hat GOOGLE_MCP_TOKEN; then
   setze GOOGLE_MCP_TOKEN "$(openssl rand -hex 32)"
 fi
 if ! hat OPENAI_API_KEY && [ -z "$SELBST" ]; then
-  K=$(geheim "OpenAI-Key für Sprachnachrichten (leer = ohne)")
+  K=$(geheim "OpenAI-Key, nur falls der Server Sprachnachrichten nicht selbst abhören kann (leer = ohne)")
   [ -n "$K" ] && setze OPENAI_API_KEY "$K"
 fi
 
